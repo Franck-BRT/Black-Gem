@@ -2,8 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 env:
@@ -103,11 +101,11 @@ jobs:
         with:
           path: dist/web
 
-  # Publication de la version web sur GitHub Pages (branche main uniquement).
+  # Publication de la version web sur GitHub Pages (branche par défaut du dépôt uniquement).
   # À activer une fois : Settings > Pages > Source : « GitHub Actions ».
   deploy-web:
     name: Publier la version web
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref_name == github.event.repository.default_branch
     needs: web
     runs-on: ubuntu-latest
     permissions:

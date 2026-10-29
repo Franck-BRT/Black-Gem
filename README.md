@@ -33,7 +33,8 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 Chaque passage de la CI (GitHub Actions) produit des exécutables à télécharger et lancer
 directement, sans rien installer : `black-gem-windows`, `black-gem-linux`, `black-gem-macos`.
-La version web est publiée sur GitHub Pages depuis la branche `main`
+La version web est publiée sur GitHub Pages depuis la branche par défaut du dépôt :
+<https://franck-brt.github.io/Black-Gem/>
 (à activer une fois : *Settings → Pages → Source : GitHub Actions*).
 
 > macOS : l'exécutable n'est pas encore signé ; au premier lancement, faire clic droit →
