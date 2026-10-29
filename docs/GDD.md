@@ -321,7 +321,7 @@ crates/
 | Jalon | Contenu                                                                  |
 |-------|--------------------------------------------------------------------------|
 | **M0** ✅ | Squelette : workspace, planète 3D procédurale, courbure dynamique, caméra RTS, jour/nuit, FR/EN, builds desktop + web en CI |
-| **M1** | Prototype jouable : foreuse → convoyeur → tour, 1 type d'ennemi, vagues |
+| **M1** ✅ | Prototype jouable : foreuse → convoyeur → tour, 1 type d'ennemi, vagues nocturnes, victoire / défaite |
 | **M2** | Gemmes : couleurs, fusion, sertissage, fours de fusion                  |
 | **M3** | VM de script + sous-ensemble Python + golems-drones + éditeur          |
 | **M4** | Structure d'expédition : génération de planète, forage du cœur, extraction |

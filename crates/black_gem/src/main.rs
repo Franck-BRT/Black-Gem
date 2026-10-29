@@ -1,11 +1,13 @@
-//! Black Gem — prototype M0 : une planète 3D, une caméra de stratégie, un cycle jour/nuit.
+//! Black Gem — prototype M1 : construire une chaîne foreuse → convoyeurs → tours et tenir trois nuits.
 
+mod build;
 mod camera;
 mod curvature;
 mod hud;
 mod i18n;
 mod sim;
 mod sky;
+mod view;
 mod world;
 
 use bevy::prelude::*;
@@ -30,6 +32,8 @@ fn main() {
             world::WorldPlugin,
             camera::RtsCameraPlugin,
             sky::SkyPlugin,
+            build::BuildPlugin,
+            view::ViewPlugin,
             hud::HudPlugin,
         ))
         .run();

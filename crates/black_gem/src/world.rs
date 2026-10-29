@@ -6,7 +6,7 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use gem_sim::{Map, Terrain, rng::Rng};
+use gem_sim::{Map, Pos, Simulation, Terrain, Tile, UNITS_PER_TILE, rng::Rng};
 
 use crate::{
     camera::RtsCamera,
@@ -64,6 +64,35 @@ fn tile_center(map: &Map, x: u32, y: u32) -> Vec3 {
     )
 }
 
+/// Position (au sol) d'une position fine de la simulation.
+pub fn pos_to_world(map: &Map, pos: Pos) -> Vec3 {
+    let half = half_extent(map);
+    let xz = Vec2::new(
+        pos.x as f32 / UNITS_PER_TILE as f32 * TILE_SIZE - half,
+        pos.y as f32 / UNITS_PER_TILE as f32 * TILE_SIZE - half,
+    );
+    Vec3::new(xz.x, ground_height(map, xz), xz.y)
+}
+
+/// Centre (au sol) d'une case de la simulation.
+pub fn tile_to_world(map: &Map, tile: Tile) -> Vec3 {
+    pos_to_world(map, tile.center())
+}
+
+/// Case de la simulation sous un point du monde.
+pub fn world_to_tile(map: &Map, point: Vec3) -> Tile {
+    let half = half_extent(map);
+    Tile::new(
+        ((point.x + half) / TILE_SIZE).floor() as i32,
+        ((point.z + half) / TILE_SIZE).floor() as i32,
+    )
+}
+
+/// Centre du QG, au sol (sur le plan horizontal x, z).
+pub fn hq_center(sim: &Simulation) -> Vec2 {
+    pos_to_world(&sim.map, sim.hq().center()).xz()
+}
+
 /// Hauteur du sol sous un point du monde (interpolée entre les sommets).
 pub fn ground_height(map: &Map, point: Vec2) -> f32 {
     let half = half_extent(map);
@@ -77,7 +106,7 @@ pub fn ground_height(map: &Map, point: Vec2) -> f32 {
     top + (bottom - top) * fy
 }
 
-fn respawn_planet(
+pub fn respawn_planet(
     mut commands: Commands,
     planet: Query<Entity, With<PlanetEntity>>,
     sim: Res<Sim>,
@@ -88,7 +117,7 @@ fn respawn_planet(
     for entity in &planet {
         commands.entity(entity).despawn();
     }
-    camera.look_at(Vec2::ZERO);
+    camera.look_at(hq_center(&sim));
     spawn_planet(commands, sim, meshes, materials);
 }
 
@@ -134,7 +163,13 @@ fn spawn_planet(
     ));
 
     spawn_props(&mut commands, map, &mut meshes, &mut materials);
-    spawn_headquarters(&mut commands, map, &mut meshes, &mut materials);
+    spawn_headquarters(
+        &mut commands,
+        map,
+        hq_center(&sim),
+        &mut meshes,
+        &mut materials,
+    );
 }
 
 /// Couleur d'une case : teinte du terrain, plus claire en altitude, avec une légère
@@ -204,7 +239,7 @@ fn terrain_mesh(map: &Map) -> Mesh {
 }
 
 /// Cristal : prisme hexagonal à pointe, facettes nettes.
-fn crystal_mesh() -> Mesh {
+pub fn crystal_mesh() -> Mesh {
     const SIDES: usize = 6;
     let ring = |y: f32, r: f32| -> Vec<Vec3> {
         (0..SIDES)
@@ -229,7 +264,7 @@ fn crystal_mesh() -> Mesh {
 }
 
 /// Maillage à facettes plates (une normale par triangle) : l'aspect « taillé » des gemmes.
-fn flat_mesh(triangles: &[[Vec3; 3]]) -> Mesh {
+pub fn flat_mesh(triangles: &[[Vec3; 3]]) -> Mesh {
     let mut positions = Vec::with_capacity(triangles.len() * 3);
     let mut normals = Vec::with_capacity(triangles.len() * 3);
     for [a, b, c] in triangles {
@@ -336,10 +371,11 @@ fn spawn_props(
 fn spawn_headquarters(
     commands: &mut Commands,
     map: &Map,
+    center: Vec2,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<CurvedMaterial>,
 ) {
-    let ground = cm_to_world(map.landing_height_cm);
+    let origin = Vec3::new(center.x, cm_to_world(map.landing_height_cm), center.y);
     let hull = materials.add(curved(StandardMaterial {
         base_color: Color::srgb(0.82, 0.84, 0.88),
         metallic: 0.9,
@@ -360,29 +396,30 @@ fn spawn_headquarters(
 
     let parts: [(Handle<Mesh>, &Handle<CurvedMaterial>, Transform); 5] = [
         (
-            meshes.add(Cylinder::new(5.5, 0.25).mesh().resolution(6)),
+            meshes.add(Cylinder::new(2.3, 0.25).mesh().resolution(6)),
             &pad,
-            Transform::from_xyz(0.0, ground + 0.12, 0.0),
+            Transform::from_translation(origin + Vec3::Y * 0.12),
         ),
         (
             meshes.add(Cylinder::new(1.6, 2.2).mesh().resolution(12)),
             &hull,
-            Transform::from_xyz(0.0, ground + 1.35, 0.0),
+            Transform::from_translation(origin + Vec3::Y * 1.35),
         ),
         (
             meshes.add(Sphere::new(1.6).mesh().uv(24, 12)),
             &hull,
-            Transform::from_xyz(0.0, ground + 2.45, 0.0).with_scale(Vec3::new(1.0, 0.7, 1.0)),
+            Transform::from_translation(origin + Vec3::Y * 2.45)
+                .with_scale(Vec3::new(1.0, 0.7, 1.0)),
         ),
         (
             meshes.add(Torus::new(1.7, 1.85)),
             &glow,
-            Transform::from_xyz(0.0, ground + 1.0, 0.0),
+            Transform::from_translation(origin + Vec3::Y * 1.0),
         ),
         (
             meshes.add(Cylinder::new(0.08, 2.0)),
             &glow,
-            Transform::from_xyz(0.0, ground + 4.1, 0.0),
+            Transform::from_translation(origin + Vec3::Y * 4.1),
         ),
     ];
     for (mesh, material, transform) in parts {
@@ -403,7 +440,7 @@ fn spawn_headquarters(
             PlanetEntity,
             Mesh3d(leg.clone()),
             MeshMaterial3d(hull.clone()),
-            Transform::from_translation(Vec3::new(0.0, ground + 0.8, 0.0) + dir * 1.9)
+            Transform::from_translation(origin + Vec3::Y * 0.8 + dir * 1.75)
                 .with_rotation(Quat::from_axis_angle(dir.cross(Vec3::Y), -0.35)),
         ));
     }
@@ -418,6 +455,6 @@ fn spawn_headquarters(
             shadow_maps_enabled: false,
             ..default()
         },
-        Transform::from_xyz(0.0, ground + 5.5, 0.0),
+        Transform::from_translation(origin + Vec3::Y * 5.5),
     ));
 }

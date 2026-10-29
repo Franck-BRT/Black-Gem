@@ -74,10 +74,18 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Applique la courbure à un point du monde côté processeur (pour les tracés de debug,
+/// aperçus de construction et rayons de tir, qui ne passent pas par le shader).
+pub fn bend(point: Vec3, params: Vec4) -> Vec3 {
+    let d = point.xz() - params.xy();
+    point - Vec3::Y * params.z * d.length_squared()
+}
+
 fn update_curvature(
     camera: Single<&RtsCamera>,
     mut current: ResMut<CurrentCurvature>,
     mut materials: ResMut<Assets<CurvedMaterial>>,
+    mut material_count: Local<usize>,
 ) {
     let params = Vec4::new(
         camera.focus.x,
@@ -85,10 +93,12 @@ fn update_curvature(
         curvature_strength(camera.pitch, camera.distance),
         0.0,
     );
-    if params == current.params {
+    // Les matériaux créés en cours de partie doivent aussi recevoir la courbure courante.
+    if params == current.params && materials.len() == *material_count {
         return;
     }
     current.params = params;
+    *material_count = materials.len();
     // Peu de matériaux partagés (instanciation automatique) : les mettre tous à jour est bon marché.
     for (_, material) in materials.iter_mut() {
         material.extension.params = params;

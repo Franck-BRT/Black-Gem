@@ -6,19 +6,32 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M0
+## État actuel : prototype M1
 
-- Planète 3D générée procéduralement (plaines, roches, lacs, filons de cristal, minerai),
-  déterministe : une même graine donne la même planète sur toutes les machines
-  (condition du multijoueur LAN / en ligne).
-- Courbure « petite planète » de l'horizon, pilotée par l'angle de la caméra : plate vue de
-  dessus (pour construire), arrondie vers l'horizon ou en dézoomant.
-- Caméra de stratégie : clavier (ZQSD en AZERTY, WASD en QWERTY), souris, tactile.
-- Cycle jour/nuit, ombres du soleil, cristaux lumineux (HDR + bloom), brouillard.
-- Interface en français ou en anglais (touche **L**).
+**Objectif : tenir trois nuits.** Chaque nuit, la Corruption sort de ses nids (en rouge, au bord
+de la carte) et marche sur le QG.
+
+1. Pose des **foreuses** sur les filons de cristal (violets).
+2. Relie-les par des **convoyeurs** au QG (pour gagner des cristaux) ou à des **tours**
+   (le cristal sert de munitions : une tour vide ne tire pas).
+3. Le QG se défend un peu tout seul, mais il faut au moins quatre tours approvisionnées.
+
+Déjà en place :
+- planète 3D procédurale et déterministe (même graine = même planète sur toutes les machines) ;
+- courbure « petite planète » pilotée par l'angle de la caméra ;
+- foreuses, convoyeurs (tracé en glissant), tours qui pivotent vers leur cible, démolition
+  (rembourse 50 %) ;
+- vagues nocturnes de plus en plus fortes, victoire / défaite ;
+- cycle jour/nuit, ombres, cristaux lumineux (HDR + bloom), brouillard ;
+- interface en français ou en anglais (touche **L**), utilisable au clavier, à la souris ou au doigt.
 
 | Touche | Action |
 |--------|--------|
+| B / C / T | Foreuse / convoyeur / tour |
+| X | Démolir |
+| R | Tourner le bâtiment |
+| Clic gauche (glisser) | Construire (une ligne de convoyeurs) |
+| Échap / clic droit | Annuler l'outil |
 | ZQSD / WASD / flèches | Déplacer la caméra |
 | A / E (AZERTY) – Q / E (QWERTY) | Pivoter |
 | Molette / pincement | Zoom |
@@ -62,8 +75,9 @@ python3 -m http.server -d dist/web 8080            # puis ouvrir http://localhos
 ## Organisation
 
 ```
-crates/gem_sim/    simulation déterministe, indépendante du moteur (carte, temps, hasard)
-crates/black_gem/  le jeu : rendu Bevy, shaders de courbure, caméra, interface
+crates/gem_sim/    simulation déterministe, indépendante du moteur : carte, bâtiments,
+                   logistique, ennemis, vagues ; pilotée par des ordres (`Command`)
+crates/black_gem/  le jeu : rendu Bevy, shaders de courbure, caméra, construction, interface
 web/               page web (détection WebGPU/WebGL2, installable sur iPhone)
 docs/GDD.md        document de conception du jeu
 ```

@@ -40,6 +40,11 @@ impl Terrain {
     pub fn is_buildable(self) -> bool {
         !matches!(self, Terrain::Water)
     }
+
+    /// La Corruption peut-elle y passer ?
+    pub fn is_walkable(self) -> bool {
+        !matches!(self, Terrain::Water)
+    }
 }
 
 /// Une zone d'expédition : grille carrée de cases, avec une hauteur par sommet.

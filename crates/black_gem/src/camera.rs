@@ -99,6 +99,7 @@ fn spawn_camera(mut commands: Commands) {
 fn keyboard_controls(
     keys: Res<ButtonInput<KeyCode>>,
     real_time: Res<Time<Real>>,
+    sim: Res<Sim>,
     mut camera: Single<&mut RtsCamera>,
 ) {
     // Temps réel : la caméra reste fluide même en pause ou en accéléré.
@@ -128,7 +129,7 @@ fn keyboard_controls(
         camera.target_yaw -= 1.8 * dt;
     }
     if keys.just_pressed(KeyCode::KeyH) {
-        camera.look_at(Vec2::ZERO);
+        camera.look_at(world::hq_center(&sim));
     }
 }
 
