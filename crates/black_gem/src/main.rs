@@ -5,6 +5,7 @@ mod camera;
 mod curvature;
 mod hud;
 mod i18n;
+mod palette;
 mod sim;
 mod sky;
 mod view;

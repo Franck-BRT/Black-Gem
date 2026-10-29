@@ -322,7 +322,7 @@ crates/
 |-------|--------------------------------------------------------------------------|
 | **M0** ✅ | Squelette : workspace, planète 3D procédurale, courbure dynamique, caméra RTS, jour/nuit, FR/EN, builds desktop + web en CI |
 | **M1** ✅ | Prototype jouable : foreuse → convoyeur → tour, 1 type d'ennemi, vagues nocturnes, victoire / défaite |
-| **M2** | Gemmes : couleurs, fusion, sertissage, fours de fusion                  |
+| **M2** ✅ | Gemmes : 5 couleurs de filons, taillerie, fours de fusion, hybrides, inventaire et sertissage, effets (dégâts, éclair, poison, ralentissement, multi-cibles) |
 | **M3** | VM de script + sous-ensemble Python + golems-drones + éditeur          |
 | **M4** | Structure d'expédition : génération de planète, forage du cœur, extraction |
 | **M5** | L'Arche : méta-progression, recherche, bibliothèque de scripts          |

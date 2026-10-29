@@ -5,12 +5,13 @@ use std::{collections::HashMap, f32::consts::FRAC_PI_2};
 
 use bevy::{light::NotShadowCaster, prelude::*};
 use gem_sim::{
-    BuildingKind, BuildingState, Dir,
-    building::{CONVEYOR_TICKS, DRILL_PERIOD},
+    BuildingKind, BuildingState, Dir, Gem, GemColor, Item, ShotSource,
+    building::{CONVEYOR_TICKS, DRILL_PERIOD, FUSE_TICKS},
 };
 
 use crate::{
     curvature::{CurrentCurvature, CurvedMaterial, bend, curved},
+    palette::{gem_glow, gem_rgb},
     sim::{NewPlanet, Sim},
     world::{self, PlanetEntity, crystal_mesh},
 };
@@ -30,6 +31,8 @@ impl Plugin for ViewPlugin {
                     (
                         animate_drills,
                         animate_conveyor_items,
+                        animate_cutters,
+                        animate_furnaces,
                         aim_turrets,
                         light_tower_gems,
                     ),
@@ -51,10 +54,18 @@ struct Kit {
     belt: Handle<CurvedMaterial>,
     glow_cyan: Handle<CurvedMaterial>,
     glow_purple: Handle<CurvedMaterial>,
-    crystal: Handle<CurvedMaterial>,
+    glow_white: Handle<CurvedMaterial>,
+    /// Cristal brut de chaque couleur.
+    crystals: [Handle<CurvedMaterial>; 5],
+    /// Gemme taillée de chaque couleur : brillante, et éteinte (tour sans munitions).
+    gems: [Handle<CurvedMaterial>; 5],
+    gems_dim: [Handle<CurvedMaterial>; 5],
     gem_charged: Handle<CurvedMaterial>,
     gem_empty: Handle<CurvedMaterial>,
+    furnace_idle: Handle<CurvedMaterial>,
     corruption: Handle<CurvedMaterial>,
+    corruption_poisoned: Handle<CurvedMaterial>,
+    corruption_slowed: Handle<CurvedMaterial>,
     nest: Handle<CurvedMaterial>,
 }
 
@@ -67,6 +78,11 @@ struct KitMeshes {
     rail: Handle<Mesh>,
     chevron: Handle<Mesh>,
     crystal: Handle<Mesh>,
+    gem: Handle<Mesh>,
+    cutter_body: Handle<Mesh>,
+    saw: Handle<Mesh>,
+    furnace_body: Handle<Mesh>,
+    furnace_core: Handle<Mesh>,
     tower_base: Handle<Mesh>,
     tower_column: Handle<Mesh>,
     turret: Handle<Mesh>,
@@ -97,12 +113,51 @@ struct TowerGem(u32);
 #[derive(Component)]
 struct EnemyView;
 
+#[derive(Component)]
+struct CutterSaw(u32);
+
+#[derive(Component)]
+struct FurnaceCore(u32);
+
+/// Gemme taillée : table, couronne et pavillon à facettes.
+fn gem_mesh() -> Mesh {
+    const SIDES: usize = 8;
+    let ring = |y: f32, r: f32, twist: f32| -> Vec<Vec3> {
+        (0..SIDES)
+            .map(|i| {
+                let a = (i as f32 + twist) / SIDES as f32 * std::f32::consts::TAU;
+                Vec3::new(a.cos() * r, y, a.sin() * r)
+            })
+            .collect()
+    };
+    let table = ring(0.2, 0.24, 0.5);
+    let girdle = ring(0.0, 0.42, 0.0);
+    let top = Vec3::new(0.0, 0.2, 0.0);
+    let bottom = Vec3::new(0.0, -0.42, 0.0);
+    let mut triangles = Vec::new();
+    for i in 0..SIDES {
+        let j = (i + 1) % SIDES;
+        triangles.push([top, table[j], table[i]]);
+        triangles.push([table[i], table[j], girdle[j]]);
+        triangles.push([table[i], girdle[j], girdle[i]]);
+        triangles.push([girdle[i], girdle[j], bottom]);
+    }
+    world::flat_mesh(&triangles)
+}
+
 fn create_kit(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<CurvedMaterial>>,
 ) {
     let mut material = |base: StandardMaterial| materials.add(curved(base));
+    let corruption_base = |emissive: LinearRgba| StandardMaterial {
+        base_color: Color::srgb(0.05, 0.02, 0.06),
+        emissive,
+        metallic: 0.9,
+        perceptual_roughness: 0.15,
+        ..default()
+    };
     let glow = |color: Color, emissive: LinearRgba| StandardMaterial {
         base_color: color,
         emissive,
@@ -118,6 +173,11 @@ fn create_kit(
             rail: meshes.add(Cuboid::new(1.0, 0.12, 0.07)),
             chevron: meshes.add(Cuboid::new(0.26, 0.02, 0.05)),
             crystal: meshes.add(crystal_mesh()),
+            gem: meshes.add(gem_mesh()),
+            cutter_body: meshes.add(Cuboid::new(0.7, 0.5, 0.6)),
+            saw: meshes.add(Cylinder::new(0.3, 0.04).mesh().resolution(12)),
+            furnace_body: meshes.add(Cylinder::new(0.4, 0.7).mesh().resolution(8)),
+            furnace_core: meshes.add(Sphere::new(0.22).mesh().ico(2).unwrap()),
             tower_base: meshes.add(Cylinder::new(0.46, 0.35).mesh().resolution(6)),
             tower_column: meshes.add(Cylinder::new(0.17, 0.8).mesh().resolution(8)),
             turret: meshes.add(Cuboid::new(0.5, 0.24, 0.36)),
@@ -149,12 +209,42 @@ fn create_kit(
             Color::srgb(0.6, 0.2, 1.0),
             LinearRgba::rgb(2.5, 0.6, 5.0),
         )),
-        crystal: material(StandardMaterial {
-            base_color: Color::srgb(0.55, 0.2, 0.95),
-            emissive: LinearRgba::rgb(2.4, 0.7, 5.0),
-            perceptual_roughness: 0.1,
-            ..default()
+        glow_white: material(glow(
+            Color::srgb(0.9, 0.9, 1.0),
+            LinearRgba::rgb(2.5, 2.5, 3.0),
+        )),
+        crystals: GemColor::ALL.map(|color| {
+            let tint = gem_rgb(color);
+            material(StandardMaterial {
+                base_color: Color::srgb(tint.x, tint.y, tint.z),
+                emissive: gem_glow(color, 2.5),
+                perceptual_roughness: 0.1,
+                ..default()
+            })
         }),
+        gems: GemColor::ALL.map(|color| {
+            let tint = gem_rgb(color);
+            material(StandardMaterial {
+                base_color: Color::srgb(tint.x, tint.y, tint.z),
+                emissive: gem_glow(color, 6.0),
+                perceptual_roughness: 0.05,
+                reflectance: 1.0,
+                ..default()
+            })
+        }),
+        gems_dim: GemColor::ALL.map(|color| {
+            let tint = gem_rgb(color) * 0.4;
+            material(StandardMaterial {
+                base_color: Color::srgb(tint.x, tint.y, tint.z),
+                emissive: gem_glow(color, 0.3),
+                perceptual_roughness: 0.15,
+                ..default()
+            })
+        }),
+        furnace_idle: material(glow(
+            Color::srgb(0.4, 0.15, 0.05),
+            LinearRgba::rgb(0.8, 0.25, 0.05),
+        )),
         gem_charged: material(glow(
             Color::srgb(0.3, 0.95, 1.0),
             LinearRgba::rgb(1.0, 5.0, 7.0),
@@ -164,13 +254,9 @@ fn create_kit(
             perceptual_roughness: 0.2,
             ..default()
         }),
-        corruption: material(StandardMaterial {
-            base_color: Color::srgb(0.05, 0.02, 0.06),
-            emissive: LinearRgba::rgb(1.8, 0.12, 1.0),
-            metallic: 0.9,
-            perceptual_roughness: 0.15,
-            ..default()
-        }),
+        corruption: material(corruption_base(LinearRgba::rgb(1.8, 0.12, 1.0))),
+        corruption_poisoned: material(corruption_base(LinearRgba::rgb(0.3, 2.2, 0.4))),
+        corruption_slowed: material(corruption_base(LinearRgba::rgb(0.2, 1.4, 2.6))),
         nest: material(StandardMaterial {
             base_color: Color::srgb(0.06, 0.01, 0.03),
             emissive: LinearRgba::rgb(3.0, 0.15, 0.4),
@@ -281,10 +367,14 @@ fn sync_buildings(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut view
                     MeshMaterial3d(kit.hull.clone()),
                     Transform::from_xyz(0.0, 0.5, 0.0),
                 ));
+                let rotor = match building.state {
+                    BuildingState::Drill { color, .. } => kit.crystals[color.index()].clone(),
+                    _ => kit.glow_purple.clone(),
+                };
                 parent.spawn((
                     DrillRotor(id),
                     Mesh3d(m.drill_rotor.clone()),
-                    MeshMaterial3d(kit.glow_purple.clone()),
+                    MeshMaterial3d(rotor),
                     Transform::from_xyz(0.0, 0.45, 0.0),
                 ));
                 parent.spawn((
@@ -319,7 +409,7 @@ fn sync_buildings(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut view
                 parent.spawn((
                     ConveyorItem(id),
                     Mesh3d(m.crystal.clone()),
-                    MeshMaterial3d(kit.crystal.clone()),
+                    MeshMaterial3d(kit.crystals[0].clone()),
                     Transform::from_xyz(0.0, 0.07, 0.0).with_scale(Vec3::splat(0.3)),
                     Visibility::Hidden,
                 ));
@@ -360,6 +450,55 @@ fn sync_buildings(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut view
                         ));
                     });
             }
+            BuildingKind::Cutter => {
+                parent.spawn((
+                    Mesh3d(m.drill_base.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.12, 0.0),
+                ));
+                parent.spawn((
+                    Mesh3d(m.cutter_body.clone()),
+                    MeshMaterial3d(kit.hull.clone()),
+                    Transform::from_xyz(-0.08, 0.45, 0.0),
+                ));
+                // Disque de taille, vertical, qui tourne pendant la taille.
+                parent.spawn((
+                    CutterSaw(id),
+                    Mesh3d(m.saw.clone()),
+                    MeshMaterial3d(kit.glow_white.clone()),
+                    Transform::from_xyz(0.05, 0.62, 0.32)
+                        .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+                ));
+                parent.spawn((
+                    Mesh3d(m.outlet.clone()),
+                    MeshMaterial3d(kit.glow_cyan.clone()),
+                    Transform::from_xyz(0.42, 0.18, 0.0),
+                ));
+            }
+            BuildingKind::Furnace => {
+                parent.spawn((
+                    Mesh3d(m.drill_base.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.12, 0.0),
+                ));
+                parent.spawn((
+                    Mesh3d(m.furnace_body.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.55, 0.0),
+                ));
+                parent.spawn((
+                    FurnaceCore(id),
+                    Mesh3d(m.furnace_core.clone()),
+                    MeshMaterial3d(kit.furnace_idle.clone()),
+                    Transform::from_xyz(0.0, 0.95, 0.0),
+                    NotShadowCaster,
+                ));
+                parent.spawn((
+                    Mesh3d(m.outlet.clone()),
+                    MeshMaterial3d(kit.glow_cyan.clone()),
+                    Transform::from_xyz(0.42, 0.18, 0.0),
+                ));
+            }
             BuildingKind::Hq => {}
         });
         views.buildings.insert(id, root.id());
@@ -372,7 +511,7 @@ fn animate_drills(
     mut rotors: Query<(&DrillRotor, &mut Transform)>,
 ) {
     for (rotor, mut transform) in &mut rotors {
-        if let Some(BuildingState::Drill { buffer, timer }) =
+        if let Some(BuildingState::Drill { buffer, timer, .. }) =
             sim.buildings.get(rotor.0).map(|b| &b.state)
         {
             // La foreuse tourne tant qu'elle produit, et s'arrête quand sa sortie est bouchée.
@@ -387,24 +526,115 @@ fn animate_drills(
 }
 
 /// Cristaux sur les convoyeurs, interpolés entre deux ticks pour un mouvement fluide.
+/// Apparence d'un objet : maillage, matériau et taille.
+fn item_look(kit: &Kit, item: Item) -> (Handle<Mesh>, Handle<CurvedMaterial>, f32) {
+    match item {
+        Item::Crystal(color) => (
+            kit.meshes.crystal.clone(),
+            kit.crystals[color.index()].clone(),
+            0.3,
+        ),
+        Item::Gem(gem) => (
+            kit.meshes.gem.clone(),
+            kit.gems[gem.main_color().index()].clone(),
+            gem_scale(gem),
+        ),
+    }
+}
+
+fn gem_scale(gem: Gem) -> f32 {
+    0.32 + 0.05 * gem.grade as f32
+}
+
+/// Objets sur les convoyeurs, interpolés entre deux ticks pour un mouvement fluide.
+#[allow(clippy::type_complexity)]
 fn animate_conveyor_items(
     sim: Res<Sim>,
+    kit: Res<Kit>,
     fixed: Res<Time<Fixed>>,
-    mut items: Query<(&ConveyorItem, &mut Transform, &mut Visibility)>,
+    mut items: Query<(
+        &ConveyorItem,
+        &mut Transform,
+        &mut Visibility,
+        &mut Mesh3d,
+        &mut MeshMaterial3d<CurvedMaterial>,
+    )>,
 ) {
     let alpha = fixed.overstep_fraction();
-    for (item, mut transform, mut visibility) in &mut items {
+    for (item, mut transform, mut visibility, mut mesh, mut material) in &mut items {
         match sim.buildings.get(item.0).map(|b| &b.state) {
             Some(BuildingState::Conveyor {
-                item: Some(progress),
+                item: Some((carried, progress)),
             }) => {
                 let moving = (*progress < CONVEYOR_TICKS) as u32 as f32;
                 let t = ((*progress as f32 + alpha * moving) / CONVEYOR_TICKS as f32).min(1.0);
-                transform.translation.x = -0.5 + t;
+                let (new_mesh, new_material, scale) = item_look(&kit, *carried);
+                if mesh.0 != new_mesh {
+                    mesh.0 = new_mesh;
+                }
+                if material.0 != new_material {
+                    material.0 = new_material;
+                }
+                // Une gemme est posée sur sa pointe : on la relève un peu.
+                let lift = if matches!(carried, Item::Gem(_)) {
+                    0.42 * scale
+                } else {
+                    0.0
+                };
+                transform.translation = Vec3::new(-0.5 + t, 0.07 + lift, 0.0);
+                transform.scale = Vec3::splat(scale);
                 *visibility = Visibility::Inherited;
             }
             _ => *visibility = Visibility::Hidden,
         }
+    }
+}
+
+/// Le disque de la taillerie tourne pendant la taille.
+fn animate_cutters(sim: Res<Sim>, time: Res<Time>, mut saws: Query<(&CutterSaw, &mut Transform)>) {
+    for (saw, mut transform) in &mut saws {
+        if let Some(BuildingState::Cutter {
+            cutting: Some(_), ..
+        }) = sim.buildings.get(saw.0).map(|b| &b.state)
+        {
+            transform.rotate_local_y(time.delta_secs() * 14.0);
+        }
+    }
+}
+
+/// Le cœur du four grossit et prend la couleur des gemmes pendant la fusion.
+fn animate_furnaces(
+    sim: Res<Sim>,
+    kit: Res<Kit>,
+    time: Res<Time>,
+    mut cores: Query<(
+        &FurnaceCore,
+        &mut Transform,
+        &mut MeshMaterial3d<CurvedMaterial>,
+    )>,
+) {
+    for (core, mut transform, mut material) in &mut cores {
+        let Some(BuildingState::Furnace {
+            slots, progress, ..
+        }) = sim.buildings.get(core.0).map(|b| &b.state)
+        else {
+            continue;
+        };
+        let (wanted, size) = match slots {
+            [Some(gem), _] | [None, Some(gem)] => {
+                let heat = *progress as f32 / FUSE_TICKS as f32;
+                let pulse = 0.08 * (time.elapsed_secs() * (4.0 + 10.0 * heat)).sin();
+                (
+                    kit.gems[gem.main_color().index()].clone(),
+                    1.0 + 0.6 * heat + pulse,
+                )
+            }
+            [None, None] => (kit.furnace_idle.clone(), 0.8),
+        };
+        if material.0 != wanted {
+            material.0 = wanted;
+        }
+        transform.scale = Vec3::splat(size);
     }
 }
 
@@ -415,7 +645,12 @@ fn aim_turrets(sim: Res<Sim>, mut turrets: Query<(&Turret, &mut Transform)>) {
             continue;
         };
         let center = building.center();
-        if let Some(shot) = sim.shots.iter().rev().find(|s| s.from == center) {
+        if let Some(shot) = sim
+            .shots
+            .iter()
+            .rev()
+            .find(|s| s.source == ShotSource::Tower && s.from == center)
+        {
             let from = world::pos_to_world(&sim.map, shot.from);
             let to = world::pos_to_world(&sim.map, shot.to);
             let d = to - from;
@@ -426,25 +661,62 @@ fn aim_turrets(sim: Res<Sim>, mut turrets: Query<(&Turret, &mut Transform)>) {
 }
 
 /// La gemme d'une tour brille quand elle a des munitions.
+/// La tour montre sa gemme sertie (taille selon le grade) ; elle brille quand la tour a
+/// des munitions. Sans gemme : un simple éclat de cristal.
 fn light_tower_gems(
     sim: Res<Sim>,
     kit: Res<Kit>,
-    mut gems: Query<(&TowerGem, &mut MeshMaterial3d<CurvedMaterial>)>,
+    mut gems: Query<(
+        &TowerGem,
+        &mut Transform,
+        &mut Mesh3d,
+        &mut MeshMaterial3d<CurvedMaterial>,
+    )>,
 ) {
-    for (gem, mut material) in &mut gems {
-        if let Some(BuildingState::Tower {
-            crystals, charge, ..
-        }) = sim.buildings.get(gem.0).map(|b| &b.state)
-        {
-            let wanted = if *crystals + *charge > 0 {
-                &kit.gem_charged
-            } else {
-                &kit.gem_empty
-            };
-            if material.0 != *wanted {
-                material.0 = wanted.clone();
+    for (tower_gem, mut transform, mut mesh, mut material) in &mut gems {
+        let Some(BuildingState::Tower {
+            crystals,
+            charge,
+            gem,
+            ..
+        }) = sim.buildings.get(tower_gem.0).map(|b| &b.state)
+        else {
+            continue;
+        };
+        let armed = *crystals + *charge > 0;
+        let (new_mesh, new_material, scale, y) = match gem {
+            Some(gem) => {
+                let color = gem.main_color().index();
+                let material = if armed {
+                    &kit.gems[color]
+                } else {
+                    &kit.gems_dim[color]
+                };
+                let scale = gem_scale(*gem) * 1.4;
+                (
+                    kit.meshes.gem.clone(),
+                    material.clone(),
+                    scale,
+                    0.15 + 0.42 * scale,
+                )
             }
+            None => {
+                let material = if armed {
+                    &kit.gem_charged
+                } else {
+                    &kit.gem_empty
+                };
+                (kit.meshes.crystal.clone(), material.clone(), 0.38, 0.1)
+            }
+        };
+        if mesh.0 != new_mesh {
+            mesh.0 = new_mesh;
         }
+        if material.0 != new_material {
+            material.0 = new_material;
+        }
+        transform.scale = Vec3::splat(scale);
+        transform.translation.y = y;
     }
 }
 
@@ -455,7 +727,7 @@ fn sync_enemies(
     fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
     mut views: ResMut<Views>,
-    mut transforms: Query<&mut Transform, With<EnemyView>>,
+    mut transforms: Query<(&mut Transform, &mut MeshMaterial3d<CurvedMaterial>), With<EnemyView>>,
 ) {
     views.enemies.retain(|id, entity| {
         let alive = sim.enemies.iter().any(|e| e.id == *id);
@@ -477,8 +749,19 @@ fn sync_enemies(
             .with_scale(Vec3::new(1.0, 0.8, 1.0) * scale);
         match views.enemies.get(&enemy.id) {
             Some(&entity) => {
-                if let Ok(mut current) = transforms.get_mut(entity) {
+                if let Ok((mut current, mut material)) = transforms.get_mut(entity) {
                     *current = transform;
+                    // Teinte selon l'effet subi : vert empoisonné, cyan ralenti.
+                    let wanted = if enemy.poison_ticks > 0 {
+                        &kit.corruption_poisoned
+                    } else if enemy.slow_ticks > 0 {
+                        &kit.corruption_slowed
+                    } else {
+                        &kit.corruption
+                    };
+                    if material.0 != *wanted {
+                        material.0 = wanted.clone();
+                    }
                 }
             }
             None => {
@@ -528,10 +811,15 @@ fn draw_shots(
 
     for (shot, born) in beams.iter() {
         let fade = 1.0 - (now - born) / BEAM_SECONDS;
-        let (height, color) = if shot.from_hq {
-            (3.0, LinearRgba::rgb(3.0, 3.0, 4.0))
-        } else {
-            (1.25, LinearRgba::rgb(0.6, 4.0, 6.0))
+        let color = match (shot.source, shot.color) {
+            (ShotSource::Hq, _) => LinearRgba::rgb(3.0, 3.0, 4.0),
+            (_, Some(gem)) => gem_glow(gem, 6.0),
+            (_, None) => LinearRgba::rgb(0.6, 4.0, 6.0),
+        };
+        let height = match shot.source {
+            ShotSource::Hq => 3.0,
+            ShotSource::Tower => 1.35,
+            ShotSource::Chain => 0.4,
         };
         let from = world::pos_to_world(&sim.map, shot.from) + Vec3::Y * height;
         let to = world::pos_to_world(&sim.map, shot.to) + Vec3::Y * 0.4;

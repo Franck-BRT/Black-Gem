@@ -6,29 +6,38 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M1
+## État actuel : prototype M2 — les gemmes
 
 **Objectif : tenir trois nuits.** Chaque nuit, la Corruption sort de ses nids (en rouge, au bord
-de la carte) et marche sur le QG.
+de la carte) et marche sur le QG. Des tours sans gemme ne suffisent plus : il faut forger.
 
-1. Pose des **foreuses** sur les filons de cristal (violets).
-2. Relie-les par des **convoyeurs** au QG (pour gagner des cristaux) ou à des **tours**
-   (le cristal sert de munitions : une tour vide ne tire pas).
-3. Le QG se défend un peu tout seul, mais il faut au moins quatre tours approvisionnées.
+1. Les filons ont **cinq couleurs**, en grandes régions : rouge (dégâts), jaune (éclair qui
+   rebondit), vert (poison), cyan (ralentissement), violet (plusieurs cibles).
+2. Une **foreuse** sur un filon produit des cristaux de sa couleur.
+3. Une **taillerie** transforme 3 cristaux d'une couleur en une **gemme de grade 1**.
+4. Un **four de fusion** fusionne 2 gemmes de même grade en une gemme du grade supérieur ;
+   deux couleurs différentes donnent une gemme **hybride** qui cumule leurs effets (dilués).
+5. Les gemmes livrées au **QG** rejoignent l'**inventaire** : clic sur une gemme, puis sur une
+   tour, pour la sertir. On peut aussi alimenter une tour en gemme directement par convoyeur.
+6. Les tours tirent avec des **cristaux** comme munitions (n'importe quelle couleur) : il faut
+   toujours les approvisionner.
 
 Déjà en place :
 - planète 3D procédurale et déterministe (même graine = même planète sur toutes les machines) ;
 - courbure « petite planète » pilotée par l'angle de la caméra ;
-- foreuses, convoyeurs (tracé en glissant), tours qui pivotent vers leur cible, démolition
-  (rembourse 50 %) ;
+- foreuses, convoyeurs (tracé en glissant), tailleries, fours, tours, démolition (rembourse 50 %,
+  la gemme d'une tour démolie revient dans l'inventaire) ;
+- effets des gemmes, rayons colorés, ennemis teintés quand ils sont empoisonnés ou ralentis ;
 - vagues nocturnes de plus en plus fortes, victoire / défaite ;
 - cycle jour/nuit, ombres, cristaux lumineux (HDR + bloom), brouillard ;
 - interface en français ou en anglais (touche **L**), utilisable au clavier, à la souris ou au doigt.
 
 | Touche | Action |
 |--------|--------|
-| B / C / T | Foreuse / convoyeur / tour |
+| B / C / G / F / T | Foreuse / convoyeur / taillerie / four / tour |
 | X | Démolir |
+| Clic sur une gemme, puis sur une tour | Sertir |
+| U | Retirer la gemme d'une tour |
 | R | Tourner le bâtiment |
 | Clic gauche (glisser) | Construire (une ligne de convoyeurs) |
 | Échap / clic droit | Annuler l'outil |

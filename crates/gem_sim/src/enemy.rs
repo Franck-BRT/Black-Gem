@@ -3,6 +3,8 @@
 use std::collections::VecDeque;
 
 use crate::{
+    TICKS_PER_SECOND,
+    gem::{POISON_TICKS, SLOW_TICKS},
     geom::{Dir, Pos, Tile, UNITS_PER_TILE},
     map::Map,
 };
@@ -26,6 +28,13 @@ pub struct Enemy {
     /// Vitesse, en unités fines par tick.
     pub speed: i32,
     pub attack_cooldown: u32,
+    /// Poison actif : points de vie perdus par seconde, et ticks restants.
+    pub poison_per_second: i32,
+    pub poison_ticks: u32,
+    poison_carry: i32,
+    /// Ralentissement actif, en pour cent, et ticks restants.
+    pub slow_percent: i32,
+    pub slow_ticks: u32,
 }
 
 /// Composition d'une vague.
@@ -39,7 +48,7 @@ pub struct WaveSpec {
 pub fn wave_spec(wave: u32) -> WaveSpec {
     WaveSpec {
         per_nest: 2 + 2 * wave,
-        hp: 30 + 25 * wave as i32,
+        hp: 30 + 30 * wave as i32 + 15 * (wave * wave) as i32,
         speed: 36 + 3 * wave as i32,
     }
 }
@@ -134,9 +143,56 @@ pub fn choose_nests(map: &Map, field: &FlowField) -> Vec<Tile> {
 }
 
 impl Enemy {
+    pub fn new(id: u32, pos: Pos, spec: &WaveSpec) -> Self {
+        Self {
+            id,
+            pos,
+            prev_pos: pos,
+            hp: spec.hp,
+            max_hp: spec.hp,
+            speed: spec.speed,
+            attack_cooldown: 0,
+            poison_per_second: 0,
+            poison_ticks: 0,
+            poison_carry: 0,
+            slow_percent: 0,
+            slow_ticks: 0,
+        }
+    }
+
+    /// Empoisonne (le poison le plus fort l'emporte, sa durée repart à zéro).
+    pub fn poison(&mut self, per_second: i32) {
+        self.poison_per_second = self.poison_per_second.max(per_second);
+        self.poison_ticks = POISON_TICKS;
+    }
+
+    /// Ralentit (le ralentissement le plus fort l'emporte).
+    pub fn slow(&mut self, percent: i32) {
+        self.slow_percent = self.slow_percent.max(percent);
+        self.slow_ticks = SLOW_TICKS;
+    }
+
+    /// Effets dans la durée : poison et fin du ralentissement.
+    fn update_effects(&mut self) {
+        if self.poison_ticks > 0 {
+            self.poison_ticks -= 1;
+            self.poison_carry += self.poison_per_second;
+            self.hp -= self.poison_carry / TICKS_PER_SECOND as i32;
+            self.poison_carry %= TICKS_PER_SECOND as i32;
+        } else {
+            self.poison_per_second = 0;
+        }
+        if self.slow_ticks > 0 {
+            self.slow_ticks -= 1;
+        } else {
+            self.slow_percent = 0;
+        }
+    }
+
     /// Fait avancer l'ennemi. Renvoie les dégâts infligés au QG pendant ce tick.
     pub fn update(&mut self, field: &FlowField, hq_center: Pos) -> i32 {
         self.prev_pos = self.pos;
+        self.update_effects();
         self.attack_cooldown = self.attack_cooldown.saturating_sub(1);
         if self.pos.distance_sq(hq_center) <= (ATTACK_RANGE as i64).pow(2) {
             if self.attack_cooldown == 0 {
@@ -150,7 +206,8 @@ impl Enemy {
             // Sur une case du but (le QG) : on s'approche du centre.
             None => hq_center,
         };
-        self.pos.move_towards(target, self.speed);
+        let speed = self.speed * (100 - self.slow_percent) / 100;
+        self.pos.move_towards(target, speed);
         0
     }
 }
@@ -178,6 +235,27 @@ mod tests {
         }
         assert_eq!(tile, goal);
         assert_eq!(steps, field.distance(start).unwrap());
+    }
+
+    #[test]
+    fn poison_hurts_over_time_and_slow_wears_off() {
+        let spec = wave_spec(1);
+        let mut enemy = Enemy::new(1, Pos::new(0, 0), &spec);
+        enemy.poison(30);
+        enemy.slow(50);
+        for _ in 0..TICKS_PER_SECOND {
+            enemy.update_effects();
+        }
+        assert_eq!(enemy.hp, spec.hp - 30);
+        assert_eq!(enemy.slow_percent, 50);
+        for _ in 0..POISON_TICKS {
+            enemy.update_effects();
+        }
+        assert_eq!(
+            enemy.hp,
+            spec.hp - 30 * POISON_TICKS as i32 / TICKS_PER_SECOND as i32
+        );
+        assert_eq!((enemy.slow_percent, enemy.poison_per_second), (0, 0));
     }
 
     #[test]

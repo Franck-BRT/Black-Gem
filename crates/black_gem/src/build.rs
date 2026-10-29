@@ -1,10 +1,11 @@
 //! Construction : choix de l'outil, case visée, aperçu et envoi des ordres à la simulation.
 
 use bevy::{picking::hover::Hovered, prelude::*};
-use gem_sim::{BuildError, BuildingKind, Command, Dir, Map, Tile};
+use gem_sim::{BuildError, BuildingKind, Command, Dir, Gem, Simulation, Tile};
 
 use crate::{
     curvature::{CurrentCurvature, bend},
+    i18n::Tr,
     sim::Sim,
     world,
 };
@@ -14,6 +15,10 @@ use crate::{
 pub enum Tool {
     Build(BuildingKind),
     Demolish,
+    /// Sertir cette gemme de l'inventaire dans une tour.
+    Socket(Gem),
+    /// Retirer la gemme d'une tour.
+    Unsocket,
 }
 
 #[derive(Resource, Default)]
@@ -25,7 +30,7 @@ pub struct BuildState {
     pub cursor: Option<Tile>,
     drag_start: Option<Tile>,
     /// Dernier refus, et l'instant (temps réel) jusqu'auquel l'afficher.
-    pub error: Option<(BuildError, f32)>,
+    pub error: Option<(Tr, f32)>,
 }
 
 /// Élément d'interface qui « capte » le pointeur : on ne construit pas à travers.
@@ -61,8 +66,11 @@ fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<BuildState>) {
     let choices = [
         (KeyCode::KeyB, Tool::Build(BuildingKind::Drill)),
         (KeyCode::KeyC, Tool::Build(BuildingKind::Conveyor)),
+        (KeyCode::KeyG, Tool::Build(BuildingKind::Cutter)),
+        (KeyCode::KeyF, Tool::Build(BuildingKind::Furnace)),
         (KeyCode::KeyT, Tool::Build(BuildingKind::Tower)),
         (KeyCode::KeyX, Tool::Demolish),
+        (KeyCode::KeyU, Tool::Unsocket),
     ];
     for (key, tool) in choices {
         if keys.just_pressed(key) {
@@ -88,23 +96,46 @@ fn pointer_over_ui(blockers: &Query<&Hovered, With<BlocksWorldInput>>) -> bool {
 }
 
 /// Case visée par un point de l'écran, en tenant compte du relief et de la courbure.
+/// Hauteur approximative d'un bâtiment : un clic sur sa silhouette le désigne,
+/// pas la case de sol qui se trouve derrière.
+fn building_height(kind: BuildingKind) -> f32 {
+    match kind {
+        BuildingKind::Hq => 4.0,
+        BuildingKind::Tower => 1.7,
+        BuildingKind::Furnace => 1.2,
+        BuildingKind::Drill | BuildingKind::Cutter => 0.9,
+        BuildingKind::Conveyor => 0.15,
+    }
+}
+
 fn pick_tile(
     screen: Vec2,
     camera: (&Camera, &GlobalTransform),
-    map: &Map,
+    sim: &Simulation,
     curvature: Vec4,
 ) -> Option<Tile> {
+    let map = &sim.map;
     let ray = camera.0.viewport_to_world(camera.1, screen).ok()?;
     let direction = *ray.direction;
+    let ground_at = |p: Vec3| {
+        let flat = world::ground_height(map, p.xz()).max(world::water_height(map));
+        bend(Vec3::new(p.x, flat, p.z), curvature).y
+    };
     let below_ground = |t: f32| {
         let p = ray.origin + direction * t;
-        let flat = world::ground_height(map, p.xz()).max(world::water_height(map));
-        p.y <= bend(Vec3::new(p.x, flat, p.z), curvature).y
+        p.y <= ground_at(p)
     };
-    // Marche le long du rayon, puis affine par dichotomie.
-    let step = 0.5;
+    // Marche le long du rayon (en s'arrêtant sur les bâtiments), puis affine par dichotomie.
+    let step = 0.25;
     let mut t = 0.0;
     while t < 900.0 {
+        let p = ray.origin + direction * (t + step);
+        let tile = world::world_to_tile(map, p);
+        if let Some(building) = sim.buildings.at(tile)
+            && p.y <= ground_at(p) + building_height(building.kind)
+        {
+            return Some(tile);
+        }
         if below_ground(t + step) {
             let (mut lo, mut hi) = (t, t + step);
             for _ in 0..12 {
@@ -135,7 +166,7 @@ fn update_cursor(
 ) {
     let cursor = match window.cursor_position() {
         Some(position) if !pointer_over_ui(&blockers) => {
-            pick_tile(position, *camera, &sim.map, curvature.params)
+            pick_tile(position, *camera, &sim, curvature.params)
         }
         _ => None,
     };
@@ -180,8 +211,14 @@ fn planned_tiles(state: &BuildState) -> Vec<(Tile, Dir)> {
     }
 }
 
+fn is_tower(sim: &Sim, tile: Tile) -> bool {
+    sim.buildings
+        .at(tile)
+        .is_some_and(|b| b.kind == BuildingKind::Tower)
+}
+
 /// Envoie à la simulation les ordres pour les cases prévues. Renvoie le premier refus.
-fn issue(sim: &mut Sim, tool: Tool, tiles: &[(Tile, Dir)]) -> Option<BuildError> {
+fn issue(sim: &mut Sim, tool: Tool, tiles: &[(Tile, Dir)]) -> Option<Tr> {
     let mut budget = sim.stock;
     let mut first_error = None;
     for &(tile, dir) in tiles {
@@ -198,14 +235,28 @@ fn issue(sim: &mut Sim, tool: Tool, tiles: &[(Tile, Dir)]) -> Option<BuildError>
                         sim.queue(Command::Build { kind, tile, dir });
                     }
                     Err(error) => {
-                        first_error.get_or_insert(error);
+                        first_error.get_or_insert(Tr::Error(error));
                     }
                 }
             }
             Tool::Demolish => sim.queue(Command::Demolish { tile }),
+            Tool::Socket(_) | Tool::Unsocket if !is_tower(sim, tile) => {
+                first_error.get_or_insert(Tr::NeedsTower);
+            }
+            Tool::Socket(gem) => sim.queue(Command::Socket { tile, gem }),
+            Tool::Unsocket => sim.queue(Command::Unsocket { tile }),
         }
     }
     first_error
+}
+
+/// Après un clic : mémorise le refus éventuel ; un sertissage réussi range l'outil.
+fn after_issue(state: &mut BuildState, error: Option<Tr>, now: f32) {
+    match error {
+        Some(error) => state.error = Some((error, now + 2.5)),
+        None if matches!(state.tool, Some(Tool::Socket(_))) => state.tool = None,
+        None => {}
+    }
 }
 
 fn mouse_build(
@@ -232,9 +283,8 @@ fn mouse_build(
             {
                 state.dir = dir;
             }
-            if let Some(error) = issue(&mut sim, tool, &tiles) {
-                state.error = Some((error, real_time.elapsed_secs() + 2.5));
-            }
+            let error = issue(&mut sim, tool, &tiles);
+            after_issue(&mut state, error, real_time.elapsed_secs());
         }
         state.drag_start = None;
     }
@@ -272,11 +322,10 @@ fn touch_build(
         if !is_tap || pointer_over_ui(&blockers) || touches.iter().count() > 0 {
             continue;
         }
-        if let Some(tile) = pick_tile(touch.position(), *camera, &sim.map, curvature.params) {
+        if let Some(tile) = pick_tile(touch.position(), *camera, &sim, curvature.params) {
             let dir = state.dir;
-            if let Some(error) = issue(&mut sim, tool, &[(tile, dir)]) {
-                state.error = Some((error, real_time.elapsed_secs() + 2.5));
-            }
+            let error = issue(&mut sim, tool, &[(tile, dir)]);
+            after_issue(&mut state, error, real_time.elapsed_secs());
         }
     }
 }
@@ -306,6 +355,7 @@ fn draw_preview(
                 .buildings
                 .at(tile)
                 .is_some_and(|b| b.kind != BuildingKind::Hq),
+            Tool::Socket(_) | Tool::Unsocket => is_tower(&sim, tile),
         };
         let color = match (tool, ok) {
             (Tool::Demolish, true) => LinearRgba::rgb(4.0, 0.6, 0.3),
@@ -326,7 +376,9 @@ fn draw_preview(
         gizmos.linestrip(corners.map(lift), color);
 
         match tool {
-            Tool::Build(BuildingKind::Tower) | Tool::Build(BuildingKind::Hq) => {}
+            Tool::Build(BuildingKind::Tower | BuildingKind::Hq)
+            | Tool::Socket(_)
+            | Tool::Unsocket => {}
             Tool::Build(_) => {
                 let (dx, dy) = dir.offset();
                 let forward = Vec3::new(dx as f32, 0.0, dy as f32);

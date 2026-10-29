@@ -10,6 +10,7 @@
 
 pub mod building;
 pub mod enemy;
+pub mod gem;
 pub mod geom;
 pub mod map;
 pub mod noise;
@@ -19,10 +20,11 @@ use std::collections::VecDeque;
 
 pub use building::{BuildError, Building, BuildingKind, BuildingState};
 pub use enemy::Enemy;
+pub use gem::{Gem, GemColor, Item, TowerProfile};
 pub use geom::{Dir, Pos, Tile, UNITS_PER_TILE};
 pub use map::{Map, Terrain};
 
-use building::{BuildingState as State, Buildings, HQ_SIZE};
+use building::{BuildingState as State, Buildings, HQ_SIZE, Storage};
 use enemy::{FlowField, SPAWN_INTERVAL, choose_nests, wave_spec};
 
 /// Fréquence de la simulation (ticks par seconde), fixe quelle que soit la vitesse d'affichage.
@@ -51,6 +53,16 @@ pub enum Command {
     Demolish {
         tile: Tile,
     },
+    /// Sertit une gemme de l'inventaire dans la tour de cette case
+    /// (l'éventuelle gemme déjà sertie retourne à l'inventaire).
+    Socket {
+        tile: Tile,
+        gem: Gem,
+    },
+    /// Retire la gemme d'une tour et la remet dans l'inventaire.
+    Unsocket {
+        tile: Tile,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,13 +71,24 @@ pub enum Outcome {
     Defeat,
 }
 
+/// Origine d'un tir.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShotSource {
+    Hq,
+    Tower,
+    /// Rebond d'éclair d'un ennemi à l'autre (gemme jaune).
+    Chain,
+}
+
 /// Un tir (pour l'affichage des rayons).
 #[derive(Clone, Copy, Debug)]
 pub struct Shot {
     pub tick: u64,
     pub from: Pos,
     pub to: Pos,
-    pub from_hq: bool,
+    pub source: ShotSource,
+    /// Couleur de la gemme sertie (aucune : simples éclats de cristal).
+    pub color: Option<GemColor>,
 }
 
 /// État complet d'une expédition.
@@ -77,6 +100,8 @@ pub struct Simulation {
     pub enemies: Vec<Enemy>,
     /// Cristaux stockés au QG (la monnaie de construction).
     pub stock: u32,
+    /// Gemmes livrées au QG, prêtes à être serties.
+    pub gems: Vec<Gem>,
     pub nests: Vec<Tile>,
     /// Nombre de vagues déjà lancées.
     pub wave: u32,
@@ -96,7 +121,7 @@ impl Simulation {
         let mut buildings = Buildings::new(map_size);
         let corner = (map_size as i32 - HQ_SIZE) / 2;
         let hq_tile = Tile::new(corner, corner);
-        buildings.place(BuildingKind::Hq, hq_tile, Dir::South);
+        buildings.place(&map, BuildingKind::Hq, hq_tile, Dir::South);
 
         let hq_tiles: Vec<Tile> = (0..HQ_SIZE)
             .flat_map(|dy| (0..HQ_SIZE).map(move |dx| Tile::new(corner + dx, corner + dy)))
@@ -111,6 +136,7 @@ impl Simulation {
             buildings,
             enemies: Vec::new(),
             stock: STARTING_CRYSTALS,
+            gems: Vec::new(),
             nests,
             wave: 0,
             kills: 0,
@@ -167,7 +193,10 @@ impl Simulation {
             self.apply(command);
         }
         self.update_waves();
-        self.buildings.update_logistics(&mut self.stock);
+        self.buildings.update_logistics(&mut Storage {
+            crystals: &mut self.stock,
+            gems: &mut self.gems,
+        });
         self.fire_weapons();
         self.update_enemies();
         self.shots.retain(|s| s.tick + SHOT_LIFETIME > self.tick);
@@ -179,7 +208,7 @@ impl Simulation {
             Command::Build { kind, tile, dir } => {
                 if kind != BuildingKind::Hq && self.check_build(kind, tile).is_ok() {
                     self.stock -= kind.cost();
-                    self.buildings.place(kind, tile, dir);
+                    self.buildings.place(&self.map, kind, tile, dir);
                 }
             }
             Command::Demolish { tile } => {
@@ -189,9 +218,44 @@ impl Simulation {
                     let id = b.id;
                     let removed = self.buildings.remove(id).unwrap();
                     self.stock += removed.kind.cost() / 2;
+                    // La gemme d'une tour démolie n'est pas perdue.
+                    if let State::Tower { gem: Some(gem), .. } = removed.state {
+                        self.gems.push(gem);
+                    }
+                }
+            }
+            Command::Socket { tile, gem } => {
+                let Some(id) = self.tower_at(tile) else {
+                    return;
+                };
+                let Some(index) = self.gems.iter().position(|&g| g == gem) else {
+                    return;
+                };
+                self.gems.remove(index);
+                if let State::Tower { gem: slot, .. } =
+                    &mut self.buildings.get_mut(id).unwrap().state
+                    && let Some(old) = slot.replace(gem)
+                {
+                    self.gems.push(old);
+                }
+            }
+            Command::Unsocket { tile } => {
+                if let Some(id) = self.tower_at(tile)
+                    && let State::Tower { gem: slot, .. } =
+                        &mut self.buildings.get_mut(id).unwrap().state
+                    && let Some(old) = slot.take()
+                {
+                    self.gems.push(old);
                 }
             }
         }
+    }
+
+    fn tower_at(&self, tile: Tile) -> Option<u32> {
+        self.buildings
+            .at(tile)
+            .filter(|b| b.kind == BuildingKind::Tower)
+            .map(|b| b.id)
     }
 
     fn update_waves(&mut self) {
@@ -213,15 +277,8 @@ impl Simulation {
             self.pending_spawns.pop_front();
             let spec = wave_spec(self.wave);
             let pos = self.nests[nest].center();
-            self.enemies.push(Enemy {
-                id: self.next_enemy_id,
-                pos,
-                prev_pos: pos,
-                hp: spec.hp,
-                max_hp: spec.hp,
-                speed: spec.speed,
-                attack_cooldown: 0,
-            });
+            self.enemies
+                .push(Enemy::new(self.next_enemy_id, pos, &spec));
             self.next_enemy_id += 1;
         }
     }
@@ -229,11 +286,15 @@ impl Simulation {
     fn fire_weapons(&mut self) {
         for id in self.buildings.ids() {
             let building = self.buildings.get_mut(id).unwrap();
-            let Some(weapon) = building.weapon() else {
+            let Some((profile, reload)) = building.weapon() else {
                 continue;
             };
             let center = building.center();
-            let from_hq = building.kind == BuildingKind::Hq;
+            let source = if building.kind == BuildingKind::Hq {
+                ShotSource::Hq
+            } else {
+                ShotSource::Tower
+            };
             let (cooldown, charge) = match &mut building.state {
                 State::Hq { cooldown } => (cooldown, None),
                 State::Tower {
@@ -248,25 +309,70 @@ impl Simulation {
             if charge.as_ref().is_some_and(|c| **c == 0) {
                 continue;
             }
-            let range_sq = (weapon.range as i64).pow(2);
-            let target = self
+
+            // Les cibles les plus proches à portée (plusieurs avec une gemme violette).
+            let range_sq = (profile.range as i64).pow(2);
+            let mut in_range: Vec<(i64, u32, usize)> = self
                 .enemies
-                .iter_mut()
-                .filter(|e| e.hp > 0 && e.pos.distance_sq(center) <= range_sq)
-                .min_by_key(|e| (e.pos.distance_sq(center), e.id));
-            if let Some(enemy) = target {
-                enemy.hp -= weapon.damage;
-                *cooldown = weapon.cooldown;
-                if let Some(charge) = charge {
-                    *charge -= 1;
-                }
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.hp > 0 && e.pos.distance_sq(center) <= range_sq)
+                .map(|(i, e)| (e.pos.distance_sq(center), e.id, i))
+                .collect();
+            if in_range.is_empty() {
+                continue;
+            }
+            in_range.sort_unstable();
+            *cooldown = reload;
+            if let Some(charge) = charge {
+                *charge -= 1;
+            }
+
+            let color = profile.gem.map(Gem::main_color);
+            for &(_, _, target) in in_range.iter().take(1 + profile.extra_targets as usize) {
+                hit(&mut self.enemies[target], &profile, profile.damage);
                 self.shots.push(Shot {
                     tick: self.tick,
                     from: center,
-                    to: enemy.pos,
-                    from_hq,
+                    to: self.enemies[target].pos,
+                    source,
+                    color,
                 });
+                self.chain_lightning(target, &profile, color);
             }
+        }
+    }
+
+    /// Éclair jaune : rebondit vers les ennemis voisins, en perdant de la force à chaque saut.
+    fn chain_lightning(&mut self, first: usize, profile: &TowerProfile, color: Option<GemColor>) {
+        let mut struck = vec![first];
+        let mut damage = profile.damage;
+        for _ in 0..profile.chain {
+            damage = damage * 60 / 100;
+            let from = self.enemies[*struck.last().unwrap()].pos;
+            let next = self
+                .enemies
+                .iter()
+                .enumerate()
+                .filter(|(i, e)| {
+                    e.hp > 0
+                        && !struck.contains(i)
+                        && e.pos.distance_sq(from) <= (gem::CHAIN_RANGE as i64).pow(2)
+                })
+                .min_by_key(|(_, e)| (e.pos.distance_sq(from), e.id))
+                .map(|(i, _)| i);
+            let Some(next) = next else {
+                break;
+            };
+            hit(&mut self.enemies[next], profile, damage);
+            self.shots.push(Shot {
+                tick: self.tick,
+                from,
+                to: self.enemies[next].pos,
+                source: ShotSource::Chain,
+                color,
+            });
+            struck.push(next);
         }
     }
 
@@ -305,23 +411,20 @@ impl Simulation {
         feed(self.stock as i64);
         feed(self.wave as i64);
         feed(self.kills as i64);
+        for gem in &self.gems {
+            feed(gem.grade as i64);
+            for color in gem.colors() {
+                feed(color as i64);
+            }
+        }
         for b in self.buildings.iter() {
             feed(b.id as i64);
             feed(b.hp as i64);
             feed(b.tile.x as i64);
             feed(b.tile.y as i64);
-            let state = match b.state {
-                State::Hq { cooldown } => [cooldown, 0, 0],
-                State::Drill { timer, buffer } => [timer, buffer, 0],
-                State::Conveyor { item } => [item.unwrap_or(u32::MAX), 0, 0],
-                State::Tower {
-                    crystals,
-                    charge,
-                    cooldown,
-                } => [crystals, charge, cooldown],
-            };
-            for v in state {
-                feed(v as i64);
+            // Le format `Debug` des états est stable : il sert d'empreinte complète.
+            for byte in format!("{:?}", b.state).bytes() {
+                feed(byte as i64);
             }
         }
         for e in &self.enemies {
@@ -329,8 +432,21 @@ impl Simulation {
             feed(e.pos.x as i64);
             feed(e.pos.y as i64);
             feed(e.hp as i64);
+            feed(e.poison_ticks as i64);
+            feed(e.slow_ticks as i64);
         }
         hash
+    }
+}
+
+/// Applique un coup et les effets de la gemme.
+fn hit(enemy: &mut Enemy, profile: &TowerProfile, damage: i32) {
+    enemy.hp -= damage;
+    if profile.poison_per_second > 0 {
+        enemy.poison(profile.poison_per_second);
+    }
+    if profile.slow_percent > 0 {
+        enemy.slow(profile.slow_percent);
     }
 }
 
@@ -401,6 +517,39 @@ mod tests {
         run(&mut sim, TICKS_PER_DAY as u64 * 3);
         assert_eq!(sim.outcome, Some(Outcome::Defeat));
         assert!(sim.kills > 0);
+    }
+
+    #[test]
+    fn socketing_swaps_gems_with_the_inventory() {
+        let mut sim = Simulation::new(4, 96);
+        let hq = sim.hq().tile;
+        let tile = Tile::new(hq.x - 3, hq.y);
+        let red = Gem::new(GemColor::Red, 2);
+        let green = Gem::new(GemColor::Green, 1);
+        sim.gems = vec![red, green];
+        sim.queue(Command::Build {
+            kind: BuildingKind::Tower,
+            tile,
+            dir: Dir::East,
+        });
+        sim.queue(Command::Socket { tile, gem: red });
+        sim.step();
+        assert_eq!(sim.gems, vec![green]);
+        sim.queue(Command::Socket { tile, gem: green });
+        sim.step();
+        assert_eq!(sim.gems, vec![red]);
+        // Démolir la tour rend sa gemme.
+        sim.queue(Command::Demolish { tile });
+        sim.step();
+        assert_eq!(sim.gems, vec![red, green]);
+        // Sertir une gemme absente de l'inventaire ne fait rien.
+        sim.queue(Command::Unsocket { tile });
+        sim.queue(Command::Socket {
+            tile,
+            gem: Gem::new(GemColor::Cyan, 5),
+        });
+        sim.step();
+        assert_eq!(sim.gems, vec![red, green]);
     }
 
     #[test]

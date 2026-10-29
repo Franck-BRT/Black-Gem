@@ -6,11 +6,12 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use gem_sim::{Map, Pos, Simulation, Terrain, Tile, UNITS_PER_TILE, rng::Rng};
+use gem_sim::{GemColor, Map, Pos, Simulation, Terrain, Tile, UNITS_PER_TILE, rng::Rng};
 
 use crate::{
     camera::RtsCamera,
     curvature::{CurvedMaterial, curved},
+    palette::{self, gem_rgb},
     sim::{NewPlanet, Sim},
 };
 
@@ -184,7 +185,11 @@ fn tile_color(map: &Map, x: u32, y: u32) -> [f32; 4] {
         ],
         Terrain::Rock => [0.24, 0.21, 0.22],
         Terrain::Water => [0.18, 0.2, 0.2],
-        Terrain::CrystalVein => [0.3, 0.12, 0.42],
+        Terrain::CrystalVein => {
+            // Le sol d'un filon prend une teinte sombre de la couleur de son cristal.
+            let tint = gem_rgb(map.vein_color(x, y)) * 0.35 + Vec3::splat(0.06);
+            [tint.x, tint.y, tint.z]
+        }
         Terrain::Ore => [0.36, 0.4, 0.46],
     };
     let jitter =
@@ -293,14 +298,17 @@ fn spawn_props(
     let chunk = meshes.add(Cuboid::new(0.4, 0.3, 0.35));
     let boulder = meshes.add(Sphere::new(0.5).mesh().ico(1).unwrap());
 
-    let crystal_material = materials.add(curved(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.2, 0.95),
-        emissive: LinearRgba::rgb(3.2, 0.9, 7.0),
-        perceptual_roughness: 0.08,
-        metallic: 0.1,
-        reflectance: 0.9,
-        ..default()
-    }));
+    let crystal_materials = GemColor::ALL.map(|color| {
+        let tint = gem_rgb(color);
+        materials.add(curved(StandardMaterial {
+            base_color: Color::srgb(tint.x, tint.y, tint.z),
+            emissive: palette::gem_glow(color, 4.5),
+            perceptual_roughness: 0.08,
+            metallic: 0.1,
+            reflectance: 0.9,
+            ..default()
+        }))
+    });
     let ore_material = materials.add(curved(StandardMaterial {
         base_color: Color::srgb(0.55, 0.6, 0.66),
         perceptual_roughness: 0.35,
@@ -331,7 +339,7 @@ fn spawn_props(
                     commands.spawn((
                         PlanetEntity,
                         Mesh3d(crystal.clone()),
-                        MeshMaterial3d(crystal_material.clone()),
+                        MeshMaterial3d(crystal_materials[map.vein_color(x, y).index()].clone()),
                         Transform::from_translation(
                             center + Vec3::new(jitter(&mut rng), -0.1, jitter(&mut rng)),
                         )

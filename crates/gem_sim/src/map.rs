@@ -1,6 +1,10 @@
 //! Génération procédurale d'une zone d'expédition.
 
-use crate::noise::{NOISE_ONE, fbm};
+use crate::{
+    gem::GemColor,
+    noise::{NOISE_ONE, fbm},
+    rng::hash2,
+};
 
 /// Part des sommets sous le niveau de l'eau (en %).
 const WATER_PERCENTILE: usize = 12;
@@ -134,6 +138,21 @@ impl Map {
 
     pub fn tile(&self, x: u32, y: u32) -> Terrain {
         self.tiles[(y * self.size + x) as usize]
+    }
+
+    /// Couleur du cristal d'un filon. Les couleurs forment de grandes régions aux bords
+    /// irréguliers : chaque couleur se mérite, il faut aller la chercher.
+    pub fn vein_color(&self, x: u32, y: u32) -> GemColor {
+        const REGION: i32 = 36;
+        let (x, y) = (x as i32, y as i32);
+        let warp = |salt: u64| {
+            ((fbm(self.seed ^ salt, x, y, &[24]) - NOISE_ONE / 2) * 2 * REGION as i64
+                / 3
+                / NOISE_ONE) as i32
+        };
+        let cx = (x + warp(0xA11CE)).div_euclid(REGION);
+        let cy = (y + warp(0xB0B)).div_euclid(REGION);
+        GemColor::ALL[(hash2(self.seed ^ 0xC0_1025, cx, cy) % 5) as usize]
     }
 
     /// Hauteur moyenne d'une case, en centimètres.
@@ -277,6 +296,18 @@ mod tests {
                 assert_eq!(map.tile(x, y), Terrain::Plain);
                 assert_eq!(map.vertex_height(x, y), map.landing_height_cm);
             }
+        }
+    }
+
+    #[test]
+    fn every_vein_color_appears() {
+        let map = Map::generate(2026, 192);
+        for color in GemColor::ALL {
+            let count = map
+                .tiles()
+                .filter(|&(x, y, t)| t == Terrain::CrystalVein && map.vein_color(x, y) == color)
+                .count();
+            assert!(count > 20, "{color:?} : seulement {count} cases");
         }
     }
 

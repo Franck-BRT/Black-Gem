@@ -5,11 +5,15 @@ use bevy::{
     picking::{events::PointerClick, hover::Hovered},
     prelude::*,
 };
-use gem_sim::{BuildingKind, Outcome, TICKS_PER_DAY, TICKS_PER_SECOND, WAVES_TO_WIN};
+use gem_sim::{
+    BuildingKind, BuildingState, Gem, Outcome, TICKS_PER_DAY, TICKS_PER_SECOND, WAVES_TO_WIN,
+    building::{CRYSTALS_PER_GEM, SHOTS_PER_CRYSTAL},
+};
 
 use crate::{
     build::{BlocksWorldInput, BuildState, Tool},
     i18n::{Language, Tr},
+    palette::gem_ui,
     sim::{GameSpeed, SPEEDS, Sim},
 };
 
@@ -21,6 +25,21 @@ struct HelpText;
 
 #[derive(Component)]
 struct ToastText;
+
+/// Description du bâtiment sous le pointeur.
+#[derive(Component)]
+struct InfoText;
+
+/// Liste des gemmes de l'inventaire.
+#[derive(Component)]
+struct InventoryList;
+
+#[derive(Component)]
+struct InventoryTitle;
+
+/// Police de l'interface, gardée pour créer des textes en cours de partie.
+#[derive(Resource)]
+struct UiFont(Handle<Font>);
 
 #[derive(Component)]
 struct OutcomeTitle;
@@ -51,6 +70,8 @@ impl Plugin for HudPlugin {
                     update_help,
                     update_tool_buttons,
                     update_toast,
+                    update_info,
+                    update_inventory,
                     update_outcome,
                 ),
             );
@@ -88,6 +109,7 @@ fn panel() -> Node {
 
 fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     let font = fonts.add(Font::from_bytes(UI_FONT.to_vec()));
+    commands.insert_resource(UiFont(font.clone()));
 
     // En haut à gauche : titre et état de l'expédition.
     commands
@@ -129,6 +151,35 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
         BlocksWorldInput,
     ));
 
+    // À droite : inventaire des gemmes (cliquer une gemme, puis une tour, pour la sertir).
+    commands
+        .spawn((
+            Node {
+                top: Val::Px(150.0),
+                right: Val::Px(12.0),
+                min_width: Val::Px(200.0),
+                ..panel()
+            },
+            BackgroundColor(PANEL_COLOR),
+            Hovered::default(),
+            BlocksWorldInput,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                InventoryTitle,
+                Text::default(),
+                text(&font, 17.0, Color::srgb(0.78, 0.55, 1.0)),
+            ));
+            parent.spawn((
+                InventoryList,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+            ));
+        });
+
     // En bas : barre de construction (cliquable, utilisable au doigt).
     commands
         .spawn(Node {
@@ -141,6 +192,11 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
             ..default()
         })
         .with_children(|parent| {
+            parent.spawn((
+                InfoText,
+                Text::default(),
+                text(&font, 15.0, Color::srgb(0.9, 0.92, 0.98)),
+            ));
             parent.spawn((
                 ToastText,
                 Text::default(),
@@ -162,14 +218,17 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                     let tools = [
                         Tool::Build(BuildingKind::Drill),
                         Tool::Build(BuildingKind::Conveyor),
+                        Tool::Build(BuildingKind::Cutter),
+                        Tool::Build(BuildingKind::Furnace),
                         Tool::Build(BuildingKind::Tower),
                         Tool::Demolish,
+                        Tool::Unsocket,
                     ];
                     for tool in tools {
                         bar.spawn((
                             ToolButton(tool),
                             Node {
-                                min_width: Val::Px(110.0),
+                                min_width: Val::Px(96.0),
                                 padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
                                 justify_content: JustifyContent::Center,
                                 border_radius: BorderRadius::all(Val::Px(6.0)),
@@ -329,6 +388,8 @@ fn update_tool_buttons(
                 let key = match kind {
                     BuildingKind::Drill => "B",
                     BuildingKind::Conveyor => "C",
+                    BuildingKind::Cutter => "G",
+                    BuildingKind::Furnace => "F",
                     _ => "T",
                 };
                 let unit = language.tr(Tr::Crystals).to_lowercase();
@@ -347,6 +408,12 @@ fn update_tool_buttons(
                 )
             }
             Tool::Demolish => format!("{} [X]\n50 %", language.tr(Tr::Demolish)),
+            Tool::Unsocket => format!(
+                "{} [U]\n{}",
+                language.tr(Tr::Unsocket),
+                language.tr(Tr::Gems).to_lowercase()
+            ),
+            Tool::Socket(gem) => language.gem_name(gem),
         };
     }
 }
@@ -358,12 +425,164 @@ fn update_toast(
     mut text: Single<&mut Text, With<ToastText>>,
 ) {
     let message = match state.error {
-        Some((error, until)) if real_time.elapsed_secs() < until => language.tr(Tr::Error(error)),
+        Some((error, until)) if real_time.elapsed_secs() < until => language.tr(error),
         _ => "",
     };
     if text.0 != message {
         text.0 = message.to_string();
     }
+}
+
+/// Décrit le bâtiment sous le pointeur : ce qu'il contient et ce qu'il fait.
+fn update_info(
+    sim: Res<Sim>,
+    state: Res<BuildState>,
+    language: Res<Language>,
+    mut text: Single<&mut Text, With<InfoText>>,
+) {
+    let lang = *language;
+    let c = lang.colon();
+    let building = state.cursor.and_then(|tile| sim.buildings.at(tile));
+    let info = match building.map(|b| (b.kind, &b.state)) {
+        None => String::new(),
+        Some((kind, state)) => {
+            let name = lang.tr(Tr::Building(kind));
+            match state {
+                BuildingState::Drill { color, .. } => {
+                    format!("{name}{c}{}", lang.tr(Tr::Color(*color)))
+                }
+                BuildingState::Cutter {
+                    counts, cutting, ..
+                } => {
+                    let stock: Vec<String> = gem_sim::GemColor::ALL
+                        .into_iter()
+                        .filter(|color| counts[color.index()] > 0)
+                        .map(|color| {
+                            format!(
+                                "{} {}/{CRYSTALS_PER_GEM}",
+                                lang.tr(Tr::Color(color)),
+                                counts[color.index()]
+                            )
+                        })
+                        .collect();
+                    let activity = match cutting {
+                        Some((color, _)) => {
+                            format!("{} {}", lang.tr(Tr::Cutting), lang.tr(Tr::Color(*color)))
+                        }
+                        None => lang.tr(Tr::Waiting).to_string(),
+                    };
+                    format!("{name}{c}{activity}   {}", stock.join(" · "))
+                }
+                BuildingState::Furnace { slots, .. } => {
+                    let held: Vec<String> =
+                        slots.iter().flatten().map(|g| lang.gem_name(*g)).collect();
+                    let activity = if held.len() == 2 {
+                        lang.tr(Tr::Fusing)
+                    } else {
+                        lang.tr(Tr::Waiting)
+                    };
+                    format!(
+                        "{name}{c}{activity} ({}/2) {}",
+                        held.len(),
+                        held.join(" + ")
+                    )
+                }
+                BuildingState::Tower {
+                    crystals,
+                    charge,
+                    gem,
+                    ..
+                } => {
+                    let profile = gem.map(Gem::profile).unwrap_or_default();
+                    let gem_label = gem.map(|g| lang.gem_name(g)).unwrap_or_else(|| "—".into());
+                    format!(
+                        "{name}{c}{gem_label} · {} {} · {} {}",
+                        lang.tr(Tr::Damage),
+                        profile.damage,
+                        lang.tr(Tr::Ammo),
+                        crystals * SHOTS_PER_CRYSTAL + charge,
+                    )
+                }
+                _ => name.to_string(),
+            }
+        }
+    };
+    if text.0 != info {
+        text.0 = info;
+    }
+}
+
+/// Inventaire des gemmes, regroupées (« Rouge G2 ×3 ») ; un clic sélectionne la gemme à sertir.
+fn update_inventory(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    language: Res<Language>,
+    font: Res<UiFont>,
+    list: Single<Entity, With<InventoryList>>,
+    mut title: Single<&mut Text, With<InventoryTitle>>,
+    mut shown: Local<Option<(Vec<Gem>, Language)>>,
+) {
+    let current = (sim.gems.clone(), *language);
+    if shown.as_ref() == Some(&current) {
+        return;
+    }
+    *shown = Some(current);
+    let lang = *language;
+    title.0 = format!("{} ({})", lang.tr(Tr::Gems), sim.gems.len());
+
+    let mut groups: Vec<(Gem, usize)> = Vec::new();
+    for &gem in &sim.gems {
+        match groups.iter_mut().find(|(g, _)| *g == gem) {
+            Some((_, count)) => *count += 1,
+            None => groups.push((gem, 1)),
+        }
+    }
+    // Les plus hauts grades en premier.
+    groups.sort_by(|a, b| b.0.grade.cmp(&a.0.grade).then(a.0.cmp(&b.0)));
+
+    commands.entity(*list).despawn_children();
+    commands.entity(*list).with_children(|parent| {
+        if groups.is_empty() {
+            parent.spawn((
+                Text::new(lang.tr(Tr::NoGems)),
+                text(&font.0, 13.0, Color::srgb(0.7, 0.7, 0.78)),
+            ));
+        }
+        for (gem, count) in groups {
+            parent
+                .spawn((
+                    Node {
+                        column_gap: Val::Px(6.0),
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_COLOR),
+                ))
+                .observe(move |_: On<PointerClick>, mut state: ResMut<BuildState>| {
+                    state.tool = Some(Tool::Socket(gem));
+                })
+                .with_children(|row| {
+                    // Une pastille par couleur (plusieurs pour une gemme hybride).
+                    for color in gem.colors() {
+                        row.spawn((
+                            Node {
+                                width: Val::Px(12.0),
+                                height: Val::Px(12.0),
+                                border_radius: BorderRadius::all(Val::Px(6.0)),
+                                ..default()
+                            },
+                            BackgroundColor(gem_ui(color)),
+                        ));
+                    }
+                    row.spawn((
+                        Text::new(format!("{} ×{count}", lang.gem_name(gem))),
+                        text(&font.0, 14.0, Color::WHITE),
+                    ));
+                });
+        }
+    });
 }
 
 fn update_outcome(
