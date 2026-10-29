@@ -2027,6 +2027,7 @@ name = "black_gem"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "gem_script",
  "gem_sim",
 ]
 
@@ -2806,8 +2807,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gem_script"
+version = "0.1.0"
+
+[[package]]
 name = "gem_sim"
 version = "0.1.0"
+dependencies = [
+ "gem_script",
+]
 
 [[package]]
 name = "gethostname"

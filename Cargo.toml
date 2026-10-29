@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/gem_sim", "crates/black_gem"]
+members = ["crates/gem_script", "crates/gem_sim", "crates/black_gem"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,6 +8,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+gem_script = { path = "crates/gem_script" }
 gem_sim = { path = "crates/gem_sim" }
 bevy = "0.20.1"
 

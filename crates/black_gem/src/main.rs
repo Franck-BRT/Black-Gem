@@ -1,8 +1,10 @@
-//! Black Gem — prototype M1 : construire une chaîne foreuse → convoyeurs → tours et tenir trois nuits.
+//! Black Gem — prototype M3 : usine, gemmes, tours, et golems programmés en Python.
 
 mod build;
 mod camera;
+mod code_buffer;
 mod curvature;
+mod editor;
 mod hud;
 mod i18n;
 mod palette;
@@ -36,6 +38,7 @@ fn main() {
             build::BuildPlugin,
             view::ViewPlugin,
             hud::HudPlugin,
+            editor::EditorPlugin,
         ))
         .run();
 }

@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+gem_script.workspace = true
 gem_sim.workspace = true
-bevy.workspace = true
+bevy = { workspace = true, features = ["system_clipboard"] }
 
 [features]
 # Version web avec WebGPU (sinon WebGL2). Sans effet sur les versions ordinateur.

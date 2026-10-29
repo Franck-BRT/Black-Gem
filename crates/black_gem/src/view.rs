@@ -37,6 +37,7 @@ impl Plugin for ViewPlugin {
                         light_tower_gems,
                     ),
                     sync_enemies,
+                    sync_golems,
                     draw_shots,
                 )
                     .chain()
@@ -63,6 +64,8 @@ struct Kit {
     gem_charged: Handle<CurvedMaterial>,
     gem_empty: Handle<CurvedMaterial>,
     furnace_idle: Handle<CurvedMaterial>,
+    golem_error: Handle<CurvedMaterial>,
+    golem_slow: Handle<CurvedMaterial>,
     corruption: Handle<CurvedMaterial>,
     corruption_poisoned: Handle<CurvedMaterial>,
     corruption_slowed: Handle<CurvedMaterial>,
@@ -88,12 +91,15 @@ struct KitMeshes {
     turret: Handle<Mesh>,
     barrel: Handle<Mesh>,
     enemy: Handle<Mesh>,
+    golem_body: Handle<Mesh>,
+    golem_ring: Handle<Mesh>,
 }
 
 #[derive(Resource, Default)]
 struct Views {
     buildings: HashMap<u32, Entity>,
     enemies: HashMap<u32, Entity>,
+    golems: HashMap<u32, Entity>,
     version: Option<u64>,
     nests_seed: Option<u64>,
 }
@@ -115,6 +121,12 @@ struct EnemyView;
 
 #[derive(Component)]
 struct CutterSaw(u32);
+
+#[derive(Component)]
+struct GolemRing(u32);
+
+#[derive(Component)]
+struct GolemCargo(u32);
 
 #[derive(Component)]
 struct FurnaceCore(u32);
@@ -183,6 +195,8 @@ fn create_kit(
             turret: meshes.add(Cuboid::new(0.5, 0.24, 0.36)),
             barrel: meshes.add(Cuboid::new(0.5, 0.08, 0.08)),
             enemy: meshes.add(Sphere::new(0.45).mesh().ico(1).unwrap()),
+            golem_body: meshes.add(Sphere::new(0.38).mesh().ico(2).unwrap()),
+            golem_ring: meshes.add(Torus::new(0.5, 0.6)),
         },
         hull: material(StandardMaterial {
             base_color: Color::srgb(0.8, 0.82, 0.86),
@@ -241,6 +255,14 @@ fn create_kit(
                 ..default()
             })
         }),
+        golem_error: material(glow(
+            Color::srgb(1.0, 0.2, 0.2),
+            LinearRgba::rgb(5.0, 0.4, 0.3),
+        )),
+        golem_slow: material(glow(
+            Color::srgb(1.0, 0.85, 0.2),
+            LinearRgba::rgb(4.0, 3.0, 0.4),
+        )),
         furnace_idle: material(glow(
             Color::srgb(0.4, 0.15, 0.05),
             LinearRgba::rgb(0.8, 0.25, 0.05),
@@ -539,6 +561,7 @@ fn item_look(kit: &Kit, item: Item) -> (Handle<Mesh>, Handle<CurvedMaterial>, f3
             kit.gems[gem.main_color().index()].clone(),
             gem_scale(gem),
         ),
+        Item::Shard => (kit.meshes.crystal.clone(), kit.glow_white.clone(), 0.25),
     }
 }
 
@@ -828,5 +851,121 @@ fn draw_shots(
             bend(to, curvature.params),
             color * fade,
         );
+    }
+}
+
+/// Golems : un drone qui flotte, un anneau qui tourne (cyan en marche, jaune en mode lent,
+/// rouge en erreur, gris à l'arrêt) et l'objet transporté en dessous.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn sync_golems(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    kit: Res<Kit>,
+    fixed: Res<Time<Fixed>>,
+    time: Res<Time<Real>>,
+    mut views: ResMut<Views>,
+    mut roots: Query<&mut Transform, (Without<GolemRing>, Without<GolemCargo>)>,
+    mut rings: Query<
+        (
+            &GolemRing,
+            &mut Transform,
+            &mut MeshMaterial3d<CurvedMaterial>,
+        ),
+        Without<GolemCargo>,
+    >,
+    mut cargos: Query<
+        (
+            &GolemCargo,
+            &mut Transform,
+            &mut Visibility,
+            &mut Mesh3d,
+            &mut MeshMaterial3d<CurvedMaterial>,
+        ),
+        Without<GolemRing>,
+    >,
+) {
+    views.golems.retain(|id, entity| {
+        let alive = sim.golem(*id).is_some();
+        if !alive {
+            commands.entity(*entity).despawn();
+        }
+        alive
+    });
+
+    let alpha = fixed.overstep_fraction();
+    let t = time.elapsed_secs();
+    for golem in &sim.golems {
+        let from = world::pos_to_world(&sim.map, golem.prev_pos);
+        let to = world::pos_to_world(&sim.map, golem.pos);
+        let hover = 1.5 + 0.12 * (t * 2.5 + golem.id as f32).sin();
+        let transform = Transform::from_translation(from.lerp(to, alpha) + Vec3::Y * hover);
+        match views.golems.get(&golem.id) {
+            Some(&entity) => {
+                if let Ok(mut current) = roots.get_mut(entity) {
+                    *current = transform;
+                }
+            }
+            None => {
+                let id = golem.id;
+                let entity = commands
+                    .spawn((PlanetEntity, transform, Visibility::default()))
+                    .with_children(|parent| {
+                        parent.spawn((
+                            Mesh3d(kit.meshes.golem_body.clone()),
+                            MeshMaterial3d(kit.hull.clone()),
+                            Transform::default(),
+                        ));
+                        parent.spawn((
+                            GolemRing(id),
+                            Mesh3d(kit.meshes.golem_ring.clone()),
+                            MeshMaterial3d(kit.glow_cyan.clone()),
+                            Transform::default(),
+                            NotShadowCaster,
+                        ));
+                        parent.spawn((
+                            GolemCargo(id),
+                            Mesh3d(kit.meshes.crystal.clone()),
+                            MeshMaterial3d(kit.glow_white.clone()),
+                            Transform::from_xyz(0.0, -0.7, 0.0),
+                            Visibility::Hidden,
+                        ));
+                    })
+                    .id();
+                views.golems.insert(id, entity);
+            }
+        }
+    }
+
+    for (ring, mut transform, mut material) in &mut rings {
+        let Some(golem) = sim.golem(ring.0) else {
+            continue;
+        };
+        let (wanted, spin) = match golem.status {
+            gem_sim::GolemStatus::Error(_) => (&kit.golem_error, 0.0),
+            gem_sim::GolemStatus::Running if golem.slow => (&kit.golem_slow, 1.0),
+            gem_sim::GolemStatus::Running => (&kit.glow_cyan, 3.0),
+            _ => (&kit.dark_metal, 0.0),
+        };
+        if material.0 != *wanted {
+            material.0 = wanted.clone();
+        }
+        transform.rotation = Quat::from_rotation_y(t * spin) * Quat::from_rotation_x(0.35);
+    }
+
+    for (cargo, mut transform, mut visibility, mut mesh, mut material) in &mut cargos {
+        match sim.golem(cargo.0).and_then(|g| g.carrying) {
+            Some(item) => {
+                let (new_mesh, new_material, scale) = item_look(&kit, item);
+                if mesh.0 != new_mesh {
+                    mesh.0 = new_mesh;
+                }
+                if material.0 != new_material {
+                    material.0 = new_material;
+                }
+                transform.scale = Vec3::splat(scale);
+                *visibility = Visibility::Inherited;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
     }
 }

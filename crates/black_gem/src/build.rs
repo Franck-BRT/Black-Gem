@@ -46,7 +46,7 @@ impl Plugin for BuildPlugin {
             .add_systems(
                 Update,
                 (
-                    hotkeys,
+                    hotkeys.run_if(not(crate::editor::typing)),
                     update_cursor,
                     mouse_build,
                     touch_build,

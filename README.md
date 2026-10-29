@@ -6,21 +6,38 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M2 — les gemmes
+## État actuel : prototype M3 — le code
 
 **Objectif : tenir trois nuits.** Chaque nuit, la Corruption sort de ses nids (en rouge, au bord
-de la carte) et marche sur le QG. Des tours sans gemme ne suffisent plus : il faut forger.
+de la carte) et marche sur le QG. Il faut une usine, des gemmes… et des **golems programmés**.
 
-1. Les filons ont **cinq couleurs**, en grandes régions : rouge (dégâts), jaune (éclair qui
-   rebondit), vert (poison), cyan (ralentissement), violet (plusieurs cibles).
-2. Une **foreuse** sur un filon produit des cristaux de sa couleur.
-3. Une **taillerie** transforme 3 cristaux d'une couleur en une **gemme de grade 1**.
-4. Un **four de fusion** fusionne 2 gemmes de même grade en une gemme du grade supérieur ;
-   deux couleurs différentes donnent une gemme **hybride** qui cumule leurs effets (dilués).
-5. Les gemmes livrées au **QG** rejoignent l'**inventaire** : clic sur une gemme, puis sur une
-   tour, pour la sertir. On peut aussi alimenter une tour en gemme directement par convoyeur.
-6. Les tours tirent avec des **cristaux** comme munitions (n'importe quelle couleur) : il faut
-   toujours les approvisionner.
+**Les golems** sont des drones fabriqués au QG (15 cristaux, panneau en bas à droite). Clic sur
+un golem pour ouvrir son **éditeur de code** et lui écrire un programme en **Python** :
+
+```python
+# Ravitailleur : apporte des munitions aux tours qui en manquent.
+while True:
+    for x, y in tours():
+        if munitions(x, y) < 12:
+            aller_vers(qg())
+            if prendre():
+                aller_vers(x, y)
+                deposer()
+    attendre(1)
+```
+
+- Les fonctions du jeu existent en **français et en anglais** (`aller_vers` = `move_to`,
+  `prendre` = `take`, `tours` = `towers`…) ; les mots-clés restent ceux de Python.
+- La **ligne en cours** est surlignée, les **variables** et les messages (`dire` / `print`)
+  s'affichent, le mode **pas à pas** exécute une instruction à la fois.
+- Les **erreurs** sont expliquées en français ou en anglais, avec la ligne et une suggestion
+  (« le nom « stoc » est inconnu — voulais-tu écrire « stock » ? »).
+- Trois **modèles** prêts à l'emploi : Ravitailleur, Sertisseur, Patrouille.
+
+**Les gemmes** : cinq couleurs de filons (rouge : dégâts, jaune : éclair en chaîne, vert : poison,
+cyan : ralentissement, violet : multi-cibles). Taillerie : 3 cristaux → gemme de grade 1. Four :
+2 gemmes de même grade → grade supérieur (deux couleurs → gemme hybride). Les gemmes livrées au QG
+se sertissent dans les tours (clic sur la gemme, puis sur la tour).
 
 Déjà en place :
 - planète 3D procédurale et déterministe (même graine = même planète sur toutes les machines) ;
@@ -28,6 +45,7 @@ Déjà en place :
 - foreuses, convoyeurs (tracé en glissant), tailleries, fours, tours, démolition (rembourse 50 %,
   la gemme d'une tour démolie revient dans l'inventaire) ;
 - effets des gemmes, rayons colorés, ennemis teintés quand ils sont empoisonnés ou ralentis ;
+- golems programmables en Python, éditeur intégré, exécution visible pas à pas ;
 - vagues nocturnes de plus en plus fortes, victoire / défaite ;
 - cycle jour/nuit, ombres, cristaux lumineux (HDR + bloom), brouillard ;
 - interface en français ou en anglais (touche **L**), utilisable au clavier, à la souris ou au doigt.
@@ -38,6 +56,8 @@ Déjà en place :
 | X | Démolir |
 | Clic sur une gemme, puis sur une tour | Sertir |
 | U | Retirer la gemme d'une tour |
+| Clic sur un golem | Ouvrir son programme |
+| Échap (dans l'éditeur) | Rendre le clavier au jeu |
 | R | Tourner le bâtiment |
 | Clic gauche (glisser) | Construire (une ligne de convoyeurs) |
 | Échap / clic droit | Annuler l'outil |
@@ -84,6 +104,7 @@ python3 -m http.server -d dist/web 8080            # puis ouvrir http://localhos
 ## Organisation
 
 ```
+crates/gem_script/ le langage du jeu : sous-ensemble de Python, compilateur, machine virtuelle
 crates/gem_sim/    simulation déterministe, indépendante du moteur : carte, bâtiments,
                    logistique, ennemis, vagues ; pilotée par des ordres (`Command`)
 crates/black_gem/  le jeu : rendu Bevy, shaders de courbure, caméra, construction, interface
@@ -91,5 +112,6 @@ web/               page web (détection WebGPU/WebGL2, installable sur iPhone)
 docs/GDD.md        document de conception du jeu
 ```
 
-La police de l'interface est [Exo 2](https://github.com/googlefonts/Exo-2.0) (licence SIL
-Open Font, voir `crates/black_gem/assets/fonts/OFL.txt`).
+Polices : [Exo 2](https://github.com/googlefonts/Exo-2.0) pour l'interface et
+[JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) pour le code (licence SIL Open Font,
+voir `crates/black_gem/assets/fonts/`).

@@ -12,6 +12,7 @@ pub mod building;
 pub mod enemy;
 pub mod gem;
 pub mod geom;
+pub mod golem;
 pub mod map;
 pub mod noise;
 pub mod rng;
@@ -22,6 +23,7 @@ pub use building::{BuildError, Building, BuildingKind, BuildingState};
 pub use enemy::Enemy;
 pub use gem::{Gem, GemColor, Item, TowerProfile};
 pub use geom::{Dir, Pos, Tile, UNITS_PER_TILE};
+pub use golem::{GOLEM_COST, Golem, GolemStatus, MAX_GOLEMS};
 pub use map::{Map, Terrain};
 
 use building::{BuildingState as State, Buildings, HQ_SIZE, Storage};
@@ -43,7 +45,7 @@ pub const WAVES_TO_WIN: u32 = 3;
 const SHOT_LIFETIME: u64 = 30;
 
 /// Ordre donné par un joueur.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Build {
         kind: BuildingKind,
@@ -62,6 +64,21 @@ pub enum Command {
     /// Retire la gemme d'une tour et la remet dans l'inventaire.
     Unsocket {
         tile: Tile,
+    },
+    /// Fabrique un golem au QG.
+    SpawnGolem,
+    /// Compile et lance un programme sur un golem.
+    RunProgram {
+        golem: u32,
+        source: String,
+    },
+    StopProgram {
+        golem: u32,
+    },
+    /// Mode lent (une instruction à la fois) ou normal.
+    SetSlow {
+        golem: u32,
+        slow: bool,
     },
 }
 
@@ -102,6 +119,7 @@ pub struct Simulation {
     pub stock: u32,
     /// Gemmes livrées au QG, prêtes à être serties.
     pub gems: Vec<Gem>,
+    pub golems: Vec<Golem>,
     pub nests: Vec<Tile>,
     /// Nombre de vagues déjà lancées.
     pub wave: u32,
@@ -137,6 +155,7 @@ impl Simulation {
             enemies: Vec::new(),
             stock: STARTING_CRYSTALS,
             gems: Vec::new(),
+            golems: Vec::new(),
             nests,
             wave: 0,
             kills: 0,
@@ -197,6 +216,7 @@ impl Simulation {
             crystals: &mut self.stock,
             gems: &mut self.gems,
         });
+        self.update_golems();
         self.fire_weapons();
         self.update_enemies();
         self.shots.retain(|s| s.tick + SHOT_LIFETIME > self.tick);
@@ -239,6 +259,32 @@ impl Simulation {
                     self.gems.push(old);
                 }
             }
+            Command::SpawnGolem => {
+                if self.stock >= GOLEM_COST && self.golems.len() < MAX_GOLEMS {
+                    self.stock -= GOLEM_COST;
+                    let id = self.golems.iter().map(|g| g.id).max().unwrap_or(0) + 1;
+                    let mut pos = self.hq().center();
+                    // Les golems sortent du QG côté sud, l'un à côté de l'autre.
+                    pos.y += 2 * UNITS_PER_TILE;
+                    pos.x += (id as i32 % 4 - 2) * UNITS_PER_TILE;
+                    self.golems.push(Golem::new(id, pos));
+                }
+            }
+            Command::RunProgram { golem, source } => {
+                if let Some(golem) = self.golem_mut(golem) {
+                    golem.start(source);
+                }
+            }
+            Command::StopProgram { golem } => {
+                if let Some(golem) = self.golem_mut(golem) {
+                    golem.stop();
+                }
+            }
+            Command::SetSlow { golem, slow } => {
+                if let Some(golem) = self.golem_mut(golem) {
+                    golem.slow = slow;
+                }
+            }
             Command::Unsocket { tile } => {
                 if let Some(id) = self.tower_at(tile)
                     && let State::Tower { gem: slot, .. } =
@@ -249,6 +295,30 @@ impl Simulation {
                 }
             }
         }
+    }
+
+    fn update_golems(&mut self) {
+        let mut world = golem::World {
+            buildings: &mut self.buildings,
+            storage: Storage {
+                crystals: &mut self.stock,
+                gems: &mut self.gems,
+            },
+            enemies: &self.enemies,
+            map_size: self.map.size,
+            tick: self.tick,
+        };
+        for golem in &mut self.golems {
+            golem.update(&mut world);
+        }
+    }
+
+    pub fn golem(&self, id: u32) -> Option<&Golem> {
+        self.golems.iter().find(|g| g.id == id)
+    }
+
+    fn golem_mut(&mut self, id: u32) -> Option<&mut Golem> {
+        self.golems.iter_mut().find(|g| g.id == id)
     }
 
     fn tower_at(&self, tile: Tile) -> Option<u32> {
@@ -435,6 +505,15 @@ impl Simulation {
             feed(e.poison_ticks as i64);
             feed(e.slow_ticks as i64);
         }
+        for g in &self.golems {
+            feed(g.id as i64);
+            feed(g.pos.x as i64);
+            feed(g.pos.y as i64);
+            feed(g.line.unwrap_or(0) as i64);
+            for byte in format!("{:?}{:?}", g.carrying, g.status).bytes() {
+                feed(byte as i64);
+            }
+        }
         hash
     }
 }
@@ -550,6 +629,53 @@ mod tests {
         });
         sim.step();
         assert_eq!(sim.gems, vec![red, green]);
+    }
+
+    #[test]
+    fn a_golem_program_supplies_a_tower() {
+        let mut sim = Simulation::new(4, 96);
+        let hq = sim.hq().tile;
+        let tile = Tile::new(hq.x - 4, hq.y + 1);
+        sim.queue(Command::Build {
+            kind: BuildingKind::Tower,
+            tile,
+            dir: Dir::East,
+        });
+        sim.queue(Command::SpawnGolem);
+        sim.step();
+        let stock = sim.stock;
+        sim.queue(Command::RunProgram {
+            golem: 1,
+            source: format!(
+                "aller_vers(qg())\nprendre()\naller_vers({}, {})\ndeposer()\ndire('fini', munitions({}, {}))",
+                tile.x, tile.y, tile.x, tile.y
+            ),
+        });
+        run(&mut sim, 200);
+        let golem = sim.golem(1).unwrap();
+        assert_eq!(golem.status, GolemStatus::Finished, "{:?}", golem.status);
+        assert_eq!(golem.log, vec!["fini 6"]);
+        assert_eq!(sim.stock, stock - 1);
+    }
+
+    #[test]
+    fn golem_errors_are_reported_with_their_line() {
+        let mut sim = Simulation::new(4, 96);
+        sim.queue(Command::SpawnGolem);
+        sim.queue(Command::RunProgram {
+            golem: 1,
+            source: "x = 1\nmunitions(0, 0)".into(),
+        });
+        run(&mut sim, 3);
+        let GolemStatus::Error(error) = &sim.golem(1).unwrap().status else {
+            panic!("{:?}", sim.golem(1).unwrap().status);
+        };
+        assert_eq!(error.line, 2);
+        assert!(
+            error
+                .message(gem_script::Lang::French)
+                .contains("pas de tour")
+        );
     }
 
     #[test]

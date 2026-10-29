@@ -244,6 +244,22 @@ un joueur en anglais, et l'éditeur peut **traduire un script** d'une langue à 
 (utile pour passer ensuite à du vrai code, presque toujours écrit en anglais).
 L'interface du jeu est elle aussi disponible en français et en anglais.
 
+### 7.5 bis Le langage tel qu'implémenté (M3)
+
+- Sous-ensemble de Python : entiers, booléens, textes, `None`, listes, tuples ; `if`/`elif`/
+  `else`, `while`, `for … in`, `break`, `continue`, `def`/`return`, `global`, `pass` ;
+  opérateurs `+ - * // % **`, comparaisons (enchaînables), `and`/`or`/`not` ;
+  `len`, `range`, `abs`, `min`, `max`, `str`, `liste.append(x)`, indices négatifs, déballage
+  `x, y = position()`.
+- **Pas de nombres à virgule** (déterminisme) : `/` est refusé avec un message qui propose `//`.
+- Les listes se **copient** à l'affectation (sémantique de valeur) : plus simple à expliquer,
+  et l'état du jeu reste copiable pour le multijoueur. À signaler dans le cours.
+- Compilation en bytecode, exécution par tranches (40 instructions par tick, ou 1 tous les 8
+  ticks en mode pas à pas) : une boucle infinie ne bloque jamais le jeu.
+- Les actions (`aller_vers`, `prendre`, `deposer`, `attendre`…) suspendent le programme jusqu'à
+  ce qu'elles soient finies, comme dans 7 Billion Humans.
+- L'arbre syntaxique est commun : le sous-ensemble Rust (Acte II) réutilisera compilateur et VM.
+
 ### 7.6 Mobile
 
 Sur iPhone, l'éditeur propose un **mode blocs/cartes** (on assemble les instructions
@@ -323,7 +339,7 @@ crates/
 | **M0** ✅ | Squelette : workspace, planète 3D procédurale, courbure dynamique, caméra RTS, jour/nuit, FR/EN, builds desktop + web en CI |
 | **M1** ✅ | Prototype jouable : foreuse → convoyeur → tour, 1 type d'ennemi, vagues nocturnes, victoire / défaite |
 | **M2** ✅ | Gemmes : 5 couleurs de filons, taillerie, fours de fusion, hybrides, inventaire et sertissage, effets (dégâts, éclair, poison, ralentissement, multi-cibles) |
-| **M3** | VM de script + sous-ensemble Python + golems-drones + éditeur          |
+| **M3** ✅ | Langage `gem_script` (sous-ensemble Python, VM déterministe), golems-drones, éditeur avec pas à pas, modèles |
 | **M4** | Structure d'expédition : génération de planète, forage du cœur, extraction |
 | **M5** | L'Arche : méta-progression, recherche, bibliothèque de scripts          |
 | **M6** | Passe graphique « DSP » : HDR, bloom, matériaux, particules, jour/nuit  |

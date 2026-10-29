@@ -42,6 +42,22 @@ pub enum Tr {
     Waiting,
     Cutting,
     Fusing,
+    Golems,
+    NewGolem,
+    Golem,
+    Run,
+    Stop,
+    Slow,
+    Fast,
+    Close,
+    Templates,
+    StatusIdle,
+    StatusRunning,
+    StatusFinished,
+    StatusError,
+    EditorHint,
+    Console,
+    NoGolems,
     Building(BuildingKind),
     Color(GemColor),
     Error(BuildError),
@@ -59,8 +75,8 @@ impl Language {
     pub fn tr(self, key: Tr) -> &'static str {
         use Language::*;
         match (key, self) {
-            (Tr::Subtitle, French) => "Prototype M2 — tenir trois nuits",
-            (Tr::Subtitle, English) => "Prototype M2 — hold for three nights",
+            (Tr::Subtitle, French) => "Prototype M3 — tenir trois nuits",
+            (Tr::Subtitle, English) => "Prototype M3 — hold for three nights",
             (Tr::Seed, French) => "Graine",
             (Tr::Seed, English) => "Seed",
             (Tr::Day, French) => "Jour",
@@ -77,6 +93,7 @@ impl Language {
                 "B : foreuse   C : convoyeur   G : taillerie   F : four   T : tour   X : démolir   R : tourner\n\
                  clic gauche : construire (glisser pour une ligne de convoyeurs)   Échap : annuler\n\
                  gemmes : clic sur une gemme de l'inventaire, puis sur une tour   U : retirer une gemme\n\
+                 golems : clic sur un golem (ou dans la liste) pour écrire son programme en Python\n\
                  ZQSD / flèches : déplacer   A / E : pivoter   molette : zoom   clic droit + glisser : orienter\n\
                  H : retour au QG   Espace : pause   1 / 2 / 3 : vitesse   N : nouvelle planète   L : langue"
             }
@@ -84,6 +101,7 @@ impl Language {
                 "B: drill   C: conveyor   G: gem cutter   F: furnace   T: tower   X: demolish   R: rotate\n\
                  left click: build (drag for a line of conveyors)   Esc: cancel\n\
                  gems: click a gem in the inventory, then a tower   U: remove a gem\n\
+                 golems: click a golem (or in the list) to write its program in Python\n\
                  WASD / arrows: move   Q / E: rotate   wheel: zoom   right click + drag: orbit\n\
                  H: back to HQ   Space: pause   1 / 2 / 3: speed   N: new planet   L: language"
             }
@@ -122,10 +140,10 @@ impl Language {
             (Tr::Gems, French) => "Gemmes",
             (Tr::Gems, English) => "Gems",
             (Tr::NoGems, French) => {
-                "Aucune gemme.\nFilon → taillerie → QG\n(3 cristaux d'une couleur = 1 gemme)"
+                "Aucune gemme.\nFilon > taillerie > QG\n(3 cristaux d'une couleur = 1 gemme)"
             }
             (Tr::NoGems, English) => {
-                "No gems yet.\nVein → gem cutter → HQ\n(3 crystals of one color = 1 gem)"
+                "No gems yet.\nVein > gem cutter > HQ\n(3 crystals of one color = 1 gem)"
             }
             (Tr::Ammo, French) => "munitions",
             (Tr::Ammo, English) => "ammo",
@@ -137,6 +155,36 @@ impl Language {
             (Tr::Cutting, English) => "cutting",
             (Tr::Fusing, French) => "fusion",
             (Tr::Fusing, English) => "fusing",
+            (Tr::Golems, _) => "Golems",
+            (Tr::NewGolem, French) => "+ Golem (15 cristaux)",
+            (Tr::NewGolem, English) => "+ Golem (15 crystals)",
+            (Tr::Golem, _) => "Golem",
+            (Tr::Run, French) => "Lancer",
+            (Tr::Run, English) => "Run",
+            (Tr::Stop, French) => "Arrêter",
+            (Tr::Stop, English) => "Stop",
+            (Tr::Slow, French) => "Pas à pas : oui",
+            (Tr::Slow, English) => "Step by step: on",
+            (Tr::Fast, French) => "Pas à pas : non",
+            (Tr::Fast, English) => "Step by step: off",
+            (Tr::Close, French) => "Fermer",
+            (Tr::Close, English) => "Close",
+            (Tr::Templates, French) => "Modèles :",
+            (Tr::Templates, English) => "Templates:",
+            (Tr::StatusIdle, French) => "à l'arrêt",
+            (Tr::StatusIdle, English) => "stopped",
+            (Tr::StatusRunning, French) => "en marche",
+            (Tr::StatusRunning, English) => "running",
+            (Tr::StatusFinished, French) => "programme terminé",
+            (Tr::StatusFinished, English) => "program finished",
+            (Tr::StatusError, French) => "erreur",
+            (Tr::StatusError, English) => "error",
+            (Tr::EditorHint, French) => "Clic : écrire · Échap : retour au jeu · Ctrl+V : coller ·",
+            (Tr::EditorHint, English) => "Click: type · Esc: back to the game · Ctrl+V: paste ·",
+            (Tr::Console, French) => "Console",
+            (Tr::Console, English) => "Console",
+            (Tr::NoGolems, French) => "Aucun golem : fabrique-en un au QG.",
+            (Tr::NoGolems, English) => "No golems yet: build one at the HQ.",
             (Tr::Building(kind), lang) => building_name(kind, lang),
             (Tr::Color(color), lang) => color_name(color, lang),
             (Tr::Error(error), lang) => error_text(error, lang),
@@ -177,6 +225,14 @@ fn color_name(color: GemColor, lang: Language) -> &'static str {
 }
 
 impl Language {
+    /// Langue des messages d'erreur des programmes.
+    pub fn script(self) -> gem_script::Lang {
+        match self {
+            Language::French => gem_script::Lang::French,
+            Language::English => gem_script::Lang::English,
+        }
+    }
+
     /// Nom d'une gemme : « Rouge-Jaune G3 ».
     pub fn gem_name(self, gem: Gem) -> String {
         let colors: Vec<&str> = gem.colors().map(|c| color_name(c, self)).collect();
@@ -205,7 +261,7 @@ pub struct I18nPlugin;
 impl Plugin for I18nPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Language>()
-            .add_systems(Update, toggle_language);
+            .add_systems(Update, toggle_language.run_if(not(crate::editor::typing)));
     }
 }
 

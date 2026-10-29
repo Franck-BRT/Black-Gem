@@ -34,7 +34,10 @@ impl Plugin for SimPlugin {
             .init_resource::<GameSpeed>()
             .add_message::<NewPlanet>()
             .add_systems(FixedUpdate, step_simulation)
-            .add_systems(Update, (speed_controls, request_new_planet));
+            .add_systems(
+                Update,
+                (speed_controls, request_new_planet).run_if(not(crate::editor::typing)),
+            );
     }
 }
 

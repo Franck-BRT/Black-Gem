@@ -182,7 +182,7 @@ impl Building {
                         [Some(_), Some(_)] => false,
                     }
             }
-            (BuildingState::Tower { crystals, .. }, Item::Crystal(_)) => {
+            (BuildingState::Tower { crystals, .. }, Item::Crystal(_) | Item::Shard) => {
                 *crystals < TOWER_MAX_CRYSTALS
             }
             (BuildingState::Tower { gem, .. }, Item::Gem(_)) => gem.is_none(),
@@ -192,7 +192,7 @@ impl Building {
 
     fn receive(&mut self, item: Item, storage: &mut Storage) {
         match (&mut self.state, item) {
-            (BuildingState::Hq { .. }, Item::Crystal(_)) => *storage.crystals += 1,
+            (BuildingState::Hq { .. }, Item::Crystal(_) | Item::Shard) => *storage.crystals += 1,
             (BuildingState::Hq { .. }, Item::Gem(gem)) => storage.gems.push(gem),
             (BuildingState::Conveyor { item: slot }, item) => *slot = Some((item, 0)),
             (BuildingState::Cutter { counts, .. }, Item::Crystal(color)) => {
@@ -202,7 +202,9 @@ impl Building {
                 let free = slots.iter_mut().find(|s| s.is_none()).unwrap();
                 *free = Some(gem);
             }
-            (BuildingState::Tower { crystals, .. }, Item::Crystal(_)) => *crystals += 1,
+            (BuildingState::Tower { crystals, .. }, Item::Crystal(_) | Item::Shard) => {
+                *crystals += 1
+            }
             (BuildingState::Tower { gem: slot, .. }, Item::Gem(gem)) => *slot = Some(gem),
             _ => unreachable!("objet refusé par `accepts`"),
         }
@@ -356,6 +358,40 @@ impl Buildings {
         }
         self.version += 1;
         Some(building)
+    }
+
+    /// Un golem prend l'objet disponible dans le bâtiment de cette case (sortie d'une
+    /// foreuse, d'une taillerie ou d'un four, objet sur un convoyeur).
+    pub fn take_at(&mut self, tile: Tile) -> Option<Item> {
+        let index = self.index(tile)?;
+        let building = self.by_id.get_mut(&self.grid[index])?;
+        match &mut building.state {
+            BuildingState::Drill { color, buffer, .. } if *buffer > 0 => {
+                *buffer -= 1;
+                Some(Item::Crystal(*color))
+            }
+            BuildingState::Conveyor { item } => item.take().map(|(item, _)| item),
+            BuildingState::Cutter { output, .. } | BuildingState::Furnace { output, .. } => {
+                output.take().map(Item::Gem)
+            }
+            _ => None,
+        }
+    }
+
+    /// Un golem dépose un objet dans le bâtiment de cette case. Renvoie `false` si refusé.
+    pub fn give_at(&mut self, tile: Tile, item: Item, storage: &mut Storage) -> bool {
+        let Some(index) = self.index(tile) else {
+            return false;
+        };
+        let Some(building) = self.by_id.get_mut(&self.grid[index]) else {
+            return false;
+        };
+        // Déposé « d'en haut » : on fait comme s'il venait de la case elle-même.
+        if !building.accepts(tile.step(building.dir.opposite()), item) {
+            return false;
+        }
+        building.receive(item, storage);
+        true
     }
 
     /// Essaie de faire passer un objet du bâtiment en `from` vers la case `to`.

@@ -67,7 +67,7 @@ impl Plugin for RtsCameraPlugin {
         app.add_systems(Startup, spawn_camera).add_systems(
             Update,
             (
-                keyboard_controls,
+                keyboard_controls.run_if(not(crate::editor::typing)),
                 mouse_controls,
                 touch_controls,
                 apply_camera,

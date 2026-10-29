@@ -159,6 +159,8 @@ impl Default for TowerProfile {
 pub enum Item {
     Crystal(GemColor),
     Gem(Gem),
+    /// Éclat de cristal pris au QG par un golem : sert de munition, pas à tailler.
+    Shard,
 }
 
 #[cfg(test)]
