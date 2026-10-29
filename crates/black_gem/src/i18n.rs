@@ -24,7 +24,6 @@ pub enum Tr {
     LanguageName,
     Crystals,
     HqHealth,
-    Wave,
     NightIn,
     NightNow,
     Kills,
@@ -58,6 +57,14 @@ pub enum Tr {
     EditorHint,
     Console,
     NoGolems,
+    Drilling,
+    Stage,
+    BuildCoreDrill,
+    StageReached,
+    Extracted,
+    LiftOffIn,
+    ColonyGoal,
+    Night,
     Building(BuildingKind),
     Color(GemColor),
     Error(BuildError),
@@ -75,8 +82,8 @@ impl Language {
     pub fn tr(self, key: Tr) -> &'static str {
         use Language::*;
         match (key, self) {
-            (Tr::Subtitle, French) => "Prototype M3 — tenir trois nuits",
-            (Tr::Subtitle, English) => "Prototype M3 — hold for three nights",
+            (Tr::Subtitle, French) => "Prototype M4 — expédition",
+            (Tr::Subtitle, English) => "Prototype M4 — expedition",
             (Tr::Seed, French) => "Graine",
             (Tr::Seed, English) => "Seed",
             (Tr::Day, French) => "Jour",
@@ -90,20 +97,20 @@ impl Language {
             (Tr::Paused, French) => "PAUSE",
             (Tr::Paused, English) => "PAUSED",
             (Tr::Controls, French) => {
-                "B : foreuse   C : convoyeur   G : taillerie   F : four   T : tour   X : démolir   R : tourner\n\
+                "B : foreuse   C : convoyeur   G : taillerie   F : four   T : tour   O : Grand foreur   X : démolir   R : tourner\n\
                  clic gauche : construire (glisser pour une ligne de convoyeurs)   Échap : annuler\n\
                  gemmes : clic sur une gemme de l'inventaire, puis sur une tour   U : retirer une gemme\n\
                  golems : clic sur un golem (ou dans la liste) pour écrire son programme en Python\n\
                  ZQSD / flèches : déplacer   A / E : pivoter   molette : zoom   clic droit + glisser : orienter\n\
-                 H : retour au QG   Espace : pause   1 / 2 / 3 : vitesse   N : nouvelle planète   L : langue"
+                 H : QG   V : Cœur   Espace : pause   1 / 2 / 3 : vitesse   N : nouvelle expédition   L : langue"
             }
             (Tr::Controls, English) => {
-                "B: drill   C: conveyor   G: gem cutter   F: furnace   T: tower   X: demolish   R: rotate\n\
+                "B: drill   C: conveyor   G: gem cutter   F: furnace   T: tower   O: Great drill   X: demolish   R: rotate\n\
                  left click: build (drag for a line of conveyors)   Esc: cancel\n\
                  gems: click a gem in the inventory, then a tower   U: remove a gem\n\
                  golems: click a golem (or in the list) to write its program in Python\n\
                  WASD / arrows: move   Q / E: rotate   wheel: zoom   right click + drag: orbit\n\
-                 H: back to HQ   Space: pause   1 / 2 / 3: speed   N: new planet   L: language"
+                 H: HQ   V: Core   Space: pause   1 / 2 / 3: speed   N: new expedition   L: language"
             }
             (Tr::LanguageName, French) => "Langue : Français",
             (Tr::LanguageName, English) => "Language: English",
@@ -111,8 +118,6 @@ impl Language {
             (Tr::Crystals, English) => "Crystals",
             (Tr::HqHealth, French) => "QG",
             (Tr::HqHealth, English) => "HQ",
-            (Tr::Wave, French) => "Vague",
-            (Tr::Wave, English) => "Wave",
             (Tr::NightIn, French) => "La nuit tombe dans",
             (Tr::NightIn, English) => "Nightfall in",
             (Tr::NightNow, French) => "La Corruption attaque !",
@@ -124,15 +129,15 @@ impl Language {
             (Tr::Victory, French) => "VICTOIRE",
             (Tr::Victory, English) => "VICTORY",
             (Tr::VictoryDetail, French) => {
-                "Trois nuits tenues : la Corruption recule.\nN : nouvelle planète"
+                "La Gemme Noire est à bord : l'expédition est un succès.\nN : nouvelle expédition"
             }
             (Tr::VictoryDetail, English) => {
-                "Three nights held: the Corruption retreats.\nN: new planet"
+                "The Black Gem is on board: the expedition is a success.\nN: new expedition"
             }
             (Tr::Defeat, French) => "DÉFAITE",
             (Tr::Defeat, English) => "DEFEAT",
-            (Tr::DefeatDetail, French) => "Le QG est tombé.\nN : nouvelle planète",
-            (Tr::DefeatDetail, English) => "The HQ has fallen.\nN: new planet",
+            (Tr::DefeatDetail, French) => "Le QG est tombé.\nN : nouvelle expédition",
+            (Tr::DefeatDetail, English) => "The HQ has fallen.\nN: new expedition",
             (Tr::Unsocket, French) => "Retirer",
             (Tr::Unsocket, English) => "Remove",
             (Tr::NeedsTower, French) => "Une gemme se sertit dans une tour",
@@ -185,6 +190,24 @@ impl Language {
             (Tr::Console, English) => "Console",
             (Tr::NoGolems, French) => "Aucun golem : fabrique-en un au QG.",
             (Tr::NoGolems, English) => "No golems yet: build one at the HQ.",
+            (Tr::Drilling, French) => "Forage",
+            (Tr::Drilling, English) => "Drilling",
+            (Tr::Stage, French) => "palier",
+            (Tr::Stage, English) => "stage",
+            (Tr::BuildCoreDrill, French) => {
+                "Objectif : construire le Grand foreur [O] sur le Cœur [V]"
+            }
+            (Tr::BuildCoreDrill, English) => "Goal: build the Great drill [O] on the Core [V]",
+            (Tr::StageReached, French) => "Palier franchi : un boss se réveille !",
+            (Tr::StageReached, English) => "Stage reached: a boss awakens!",
+            (Tr::Extracted, French) => "La Gemme Noire est extraite ! Tiens jusqu'au décollage !",
+            (Tr::Extracted, English) => "The Black Gem is extracted! Hold until lift-off!",
+            (Tr::LiftOffIn, French) => "Décollage dans",
+            (Tr::LiftOffIn, English) => "Lift-off in",
+            (Tr::ColonyGoal, French) => "Colonie : survis aussi longtemps que possible",
+            (Tr::ColonyGoal, English) => "Colony: survive as long as you can",
+            (Tr::Night, French) => "Nuit",
+            (Tr::Night, English) => "Night",
             (Tr::Building(kind), lang) => building_name(kind, lang),
             (Tr::Color(color), lang) => color_name(color, lang),
             (Tr::Error(error), lang) => error_text(error, lang),
@@ -206,6 +229,8 @@ fn building_name(kind: BuildingKind, lang: Language) -> &'static str {
         BuildingKind::Furnace => "Furnace",
         BuildingKind::Tower if french => "Tour",
         BuildingKind::Tower => "Tower",
+        BuildingKind::CoreDrill if french => "Grand foreur",
+        BuildingKind::CoreDrill => "Great drill",
     }
 }
 
@@ -253,6 +278,14 @@ fn error_text(error: BuildError, lang: Language) -> &'static str {
         BuildError::NeedsCrystalVein => "A drill must be placed on a crystal vein",
         BuildError::NotEnoughCrystals if french => "Pas assez de cristaux",
         BuildError::NotEnoughCrystals => "Not enough crystals",
+        BuildError::NeedsCore if french => {
+            "Le Grand foreur se construit sur le Cœur (touche V pour le voir)"
+        }
+        BuildError::NeedsCore => "The Great drill must be built on the Core (press V to see it)",
+        BuildError::CoreSite if french => "Le Cœur est réservé au Grand foreur",
+        BuildError::CoreSite => "The Core is reserved for the Great drill",
+        BuildError::NoCore if french => "Pas de Cœur à forer en mode Colonie",
+        BuildError::NoCore => "No Core to drill in Colony mode",
     }
 }
 

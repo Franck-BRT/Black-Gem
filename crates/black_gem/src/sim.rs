@@ -4,9 +4,10 @@
 //! la fréquence d'affichage : c'est ce qui permettra le multijoueur en lockstep.
 
 use bevy::prelude::*;
-use gem_sim::{Simulation, TICKS_PER_SECOND};
+use gem_sim::{Format, Simulation, TICKS_PER_SECOND};
 
-pub const MAP_SIZE: u32 = 192;
+use crate::mission::{MissionMenu, playing};
+
 pub const FIRST_SEED: u64 = 2026;
 
 #[derive(Resource, Deref, DerefMut)]
@@ -29,11 +30,12 @@ pub struct SimPlugin;
 
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Sim(Simulation::new(FIRST_SEED, MAP_SIZE)))
+        app.insert_resource(Sim(Simulation::with_format(FIRST_SEED, Format::Expedition)))
             .insert_resource(Time::<Fixed>::from_hz(TICKS_PER_SECOND as f64))
             .init_resource::<GameSpeed>()
             .add_message::<NewPlanet>()
-            .add_systems(FixedUpdate, step_simulation)
+            // Le temps est figé tant que le joueur choisit son expédition.
+            .add_systems(FixedUpdate, step_simulation.run_if(playing))
             .add_systems(
                 Update,
                 (speed_controls, request_new_planet).run_if(not(crate::editor::typing)),
@@ -72,14 +74,14 @@ fn speed_controls(
     }
 }
 
+/// N : retour à l'écran de choix d'expédition.
 fn request_new_planet(
     keys: Res<ButtonInput<KeyCode>>,
-    mut sim: ResMut<Sim>,
-    mut new_planet: MessageWriter<NewPlanet>,
+    sim: Res<Sim>,
+    mut menu: ResMut<MissionMenu>,
 ) {
-    if keys.just_pressed(KeyCode::KeyN) {
-        let seed = sim.map.seed + 1;
-        sim.0 = Simulation::new(seed, MAP_SIZE);
-        new_planet.write(NewPlanet);
+    if keys.just_pressed(KeyCode::KeyN) && !menu.open {
+        menu.open = true;
+        menu.seed = sim.map.seed + 1;
     }
 }

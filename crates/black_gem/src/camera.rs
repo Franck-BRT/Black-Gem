@@ -131,6 +131,12 @@ fn keyboard_controls(
     if keys.just_pressed(KeyCode::KeyH) {
         camera.look_at(world::hq_center(&sim));
     }
+    if keys.just_pressed(KeyCode::KeyV)
+        && let Some(core) = sim.core
+    {
+        let center = world::tile_to_world(&sim.map, gem_sim::Tile::new(core.x + 1, core.y + 1));
+        camera.look_at(center.xz());
+    }
 }
 
 fn mouse_controls(

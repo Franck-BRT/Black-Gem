@@ -1,4 +1,5 @@
-//! Black Gem — prototype M3 : usine, gemmes, tours, et golems programmés en Python.
+//! Black Gem — prototype M4 : expéditions (15 min à plus d'une heure), forage du Cœur,
+//! usine, gemmes, tours, et golems programmés en Python.
 
 mod build;
 mod camera;
@@ -7,6 +8,7 @@ mod curvature;
 mod editor;
 mod hud;
 mod i18n;
+mod mission;
 mod palette;
 mod sim;
 mod sky;
@@ -39,6 +41,7 @@ fn main() {
             view::ViewPlugin,
             hud::HudPlugin,
             editor::EditorPlugin,
+            mission::MissionPlugin,
         ))
         .run();
 }

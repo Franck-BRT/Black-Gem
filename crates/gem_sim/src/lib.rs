@@ -10,6 +10,7 @@
 
 pub mod building;
 pub mod enemy;
+pub mod expedition;
 pub mod gem;
 pub mod geom;
 pub mod golem;
@@ -21,25 +22,23 @@ use std::collections::VecDeque;
 
 pub use building::{BuildError, Building, BuildingKind, BuildingState};
 pub use enemy::Enemy;
+pub use expedition::{EXTRACTION_TICKS, ExpeditionConfig, Format};
 pub use gem::{Gem, GemColor, Item, TowerProfile};
 pub use geom::{Dir, Pos, Tile, UNITS_PER_TILE};
 pub use golem::{GOLEM_COST, Golem, GolemStatus, MAX_GOLEMS};
 pub use map::{Map, Terrain};
 
-use building::{BuildingState as State, Buildings, HQ_SIZE, Storage};
+use building::{BuildingState as State, Buildings, CORE_DRILL_SIZE, HQ_SIZE, Storage};
 use enemy::{FlowField, SPAWN_INTERVAL, choose_nests, wave_spec};
 
 /// Fréquence de la simulation (ticks par seconde), fixe quelle que soit la vitesse d'affichage.
 pub const TICKS_PER_SECOND: u32 = 30;
 
-/// Durée d'un cycle jour/nuit, en ticks (6 minutes pour le prototype).
+/// Durée d'un cycle jour/nuit par défaut, en ticks (6 minutes ; chaque format a la sienne).
 pub const TICKS_PER_DAY: u32 = 6 * 60 * TICKS_PER_SECOND;
 
 /// Cristaux disponibles à l'atterrissage.
 pub const STARTING_CRYSTALS: u32 = 50;
-
-/// Nombre de nuits à tenir pour gagner l'expédition (prototype).
-pub const WAVES_TO_WIN: u32 = 3;
 
 /// Durée de conservation d'un tir, en ticks (le rendu peut sauter des ticks en vitesse rapide).
 const SHOT_LIFETIME: u64 = 30;
@@ -108,6 +107,16 @@ pub struct Shot {
     pub color: Option<GemColor>,
 }
 
+/// Un ennemi qui va sortir d'un nid.
+#[derive(Clone, Copy, Debug)]
+struct PendingSpawn {
+    at: u64,
+    nest: usize,
+    /// Force de la vague (voir `wave_spec`).
+    level: u32,
+    boss: bool,
+}
+
 /// État complet d'une expédition.
 #[derive(Clone, Debug)]
 pub struct Simulation {
@@ -121,20 +130,46 @@ pub struct Simulation {
     pub gems: Vec<Gem>,
     pub golems: Vec<Golem>,
     pub nests: Vec<Tile>,
-    /// Nombre de vagues déjà lancées.
+    pub config: ExpeditionConfig,
+    /// Le Cœur : coin nord-ouest du carré où construire le Grand foreur (absent en Colonie).
+    pub core: Option<Tile>,
+    /// Cristaux brûlés par le Grand foreur.
+    pub drilled: u32,
+    /// Paliers de forage franchis.
+    pub stage: u32,
+    /// Fin du décollage, une fois la Gemme Noire extraite.
+    pub extraction_until: Option<u64>,
+    /// Nombre de nuits (vagues nocturnes) déjà lancées.
     pub wave: u32,
     pub kills: u32,
     pub shots: Vec<Shot>,
     pub outcome: Option<Outcome>,
     field: FlowField,
-    /// Apparitions prévues : (tick, nid), dans l'ordre chronologique.
-    pending_spawns: VecDeque<(u64, usize)>,
+    /// Apparitions prévues, dans l'ordre chronologique.
+    pending_spawns: VecDeque<PendingSpawn>,
     commands: Vec<Command>,
     next_enemy_id: u32,
 }
 
 impl Simulation {
+    /// Expédition standard sur une carte de la taille donnée (utile pour les tests).
     pub fn new(seed: u64, map_size: u32) -> Self {
+        Self::with_config(
+            seed,
+            ExpeditionConfig {
+                map_size,
+                ticks_per_day: TICKS_PER_DAY,
+                ..Format::Expedition.config()
+            },
+        )
+    }
+
+    pub fn with_format(seed: u64, format: Format) -> Self {
+        Self::with_config(seed, format.config())
+    }
+
+    pub fn with_config(seed: u64, config: ExpeditionConfig) -> Self {
+        let map_size = config.map_size;
         let map = Map::generate(seed, map_size);
         let mut buildings = Buildings::new(map_size);
         let corner = (map_size as i32 - HQ_SIZE) / 2;
@@ -146,17 +181,25 @@ impl Simulation {
             .collect();
         let field = FlowField::toward(&map, &hq_tiles);
         let nests = choose_nests(&map, &field);
+        let core = (config.stages > 0)
+            .then(|| choose_core(&map, &field, hq_tile))
+            .flatten();
 
         Self {
             map,
             // On atterrit en début de matinée.
-            tick: (TICKS_PER_DAY / 4) as u64,
+            tick: (config.ticks_per_day / 4) as u64,
             buildings,
             enemies: Vec::new(),
             stock: STARTING_CRYSTALS,
             gems: Vec::new(),
             golems: Vec::new(),
             nests,
+            config,
+            core,
+            drilled: 0,
+            stage: 0,
+            extraction_until: None,
             wave: 0,
             kills: 0,
             shots: Vec::new(),
@@ -168,9 +211,25 @@ impl Simulation {
         }
     }
 
+    /// Avancement du forage, en pour cent (0 sans Cœur).
+    pub fn drilling_percent(&self) -> u32 {
+        match self.config.total_crystals() {
+            0 => 0,
+            total => self.drilled.min(total) * 100 / total,
+        }
+    }
+
+    /// Le Grand foreur est-il construit ?
+    pub fn core_drill(&self) -> Option<&Building> {
+        self.buildings
+            .iter()
+            .find(|b| b.kind == BuildingKind::CoreDrill)
+    }
+
     /// Heure du jour, en millièmes de journée : 0 = minuit, 250 = lever, 500 = midi, 750 = coucher.
     pub fn time_of_day(&self) -> u32 {
-        ((self.tick % TICKS_PER_DAY as u64) * 1000 / TICKS_PER_DAY as u64) as u32
+        let day = self.config.ticks_per_day as u64;
+        ((self.tick % day) * 1000 / day) as u32
     }
 
     /// La nuit, la Corruption attaque.
@@ -180,7 +239,7 @@ impl Simulation {
 
     /// Ticks avant la prochaine tombée de la nuit.
     pub fn ticks_until_nightfall(&self) -> u64 {
-        let day = TICKS_PER_DAY as u64;
+        let day = self.config.ticks_per_day as u64;
         let dusk = day * 3 / 4;
         (dusk + day - self.tick % day) % day
     }
@@ -191,6 +250,27 @@ impl Simulation {
 
     /// Une construction serait-elle acceptée ?
     pub fn check_build(&self, kind: BuildingKind, tile: Tile) -> Result<(), BuildError> {
+        match (kind, self.core) {
+            (BuildingKind::CoreDrill, None) => return Err(BuildError::NoCore),
+            (BuildingKind::CoreDrill, Some(core)) if core != tile => {
+                return Err(BuildError::NeedsCore);
+            }
+            (BuildingKind::CoreDrill, _) => {}
+            (_, Some(core)) => {
+                let inside = |t: Tile| {
+                    (core.x..core.x + CORE_DRILL_SIZE).contains(&t.x)
+                        && (core.y..core.y + CORE_DRILL_SIZE).contains(&t.y)
+                };
+                let size = kind.size();
+                let overlaps = (0..size)
+                    .flat_map(|dy| (0..size).map(move |dx| Tile::new(tile.x + dx, tile.y + dy)))
+                    .any(inside);
+                if overlaps {
+                    return Err(BuildError::CoreSite);
+                }
+            }
+            (_, None) => {}
+        }
         self.buildings.check_site(&self.map, kind, tile)?;
         if self.stock < kind.cost() {
             return Err(BuildError::NotEnoughCrystals);
@@ -215,8 +295,10 @@ impl Simulation {
         self.buildings.update_logistics(&mut Storage {
             crystals: &mut self.stock,
             gems: &mut self.gems,
+            drilled: &mut self.drilled,
         });
         self.update_golems();
+        self.update_drilling();
         self.fire_weapons();
         self.update_enemies();
         self.shots.retain(|s| s.tick + SHOT_LIFETIME > self.tick);
@@ -298,12 +380,17 @@ impl Simulation {
     }
 
     fn update_golems(&mut self) {
+        let core = self.core.map(|c| Tile::new(c.x + 1, c.y + 1));
+        let drilling_percent = self.drilling_percent();
         let mut world = golem::World {
             buildings: &mut self.buildings,
             storage: Storage {
                 crystals: &mut self.stock,
                 gems: &mut self.gems,
+                drilled: &mut self.drilled,
             },
+            core,
+            drilling_percent,
             enemies: &self.enemies,
             map_size: self.map.size,
             tick: self.tick,
@@ -328,28 +415,70 @@ impl Simulation {
             .map(|b| b.id)
     }
 
-    fn update_waves(&mut self) {
-        let day = TICKS_PER_DAY as u64;
-        if self.tick % day == day * 3 / 4 && self.wave < WAVES_TO_WIN {
-            self.wave += 1;
-            let spec = wave_spec(self.wave);
-            for i in 0..spec.per_nest as u64 {
-                for nest in 0..self.nests.len() {
-                    self.pending_spawns
-                        .push_back((self.tick + i * SPAWN_INTERVAL + nest as u64 * 7, nest));
-                }
+    /// Programme une vague : `per_nest` ennemis de force `level` à chaque nid (et un boss par nid).
+    fn schedule_wave(&mut self, level: u32, bosses: bool) {
+        let spec = wave_spec(level, self.config.difficulty);
+        for nest in 0..self.nests.len() {
+            if bosses {
+                self.pending_spawns.push_back(PendingSpawn {
+                    at: self.tick + nest as u64 * 7,
+                    nest,
+                    level,
+                    boss: true,
+                });
             }
         }
-        while let Some(&(at, nest)) = self.pending_spawns.front() {
-            if at > self.tick {
+        for i in 0..spec.per_nest as u64 {
+            for nest in 0..self.nests.len() {
+                self.pending_spawns.push_back(PendingSpawn {
+                    at: self.tick + (i + bosses as u64) * SPAWN_INTERVAL + nest as u64 * 7,
+                    nest,
+                    level,
+                    boss: false,
+                });
+            }
+        }
+    }
+
+    fn update_waves(&mut self) {
+        let day = self.config.ticks_per_day as u64;
+        // Chaque nuit, une vague plus forte que la précédente.
+        if self.tick % day == day * 3 / 4 && self.extraction_until.is_none() {
+            self.wave += 1;
+            self.schedule_wave(self.wave, false);
+        }
+        while let Some(&spawn) = self.pending_spawns.front() {
+            if spawn.at > self.tick {
                 break;
             }
             self.pending_spawns.pop_front();
-            let spec = wave_spec(self.wave);
-            let pos = self.nests[nest].center();
-            self.enemies
-                .push(Enemy::new(self.next_enemy_id, pos, &spec));
+            let spec = wave_spec(spawn.level, self.config.difficulty);
+            let pos = self.nests[spawn.nest].center();
+            let enemy = if spawn.boss {
+                Enemy::boss(self.next_enemy_id, pos, &spec)
+            } else {
+                Enemy::new(self.next_enemy_id, pos, &spec)
+            };
+            self.enemies.push(enemy);
             self.next_enemy_id += 1;
+        }
+    }
+
+    /// Paliers de forage : chacun déclenche une vague majeure avec des boss ; le dernier
+    /// extrait la Gemme Noire et lance le décollage.
+    fn update_drilling(&mut self) {
+        let stages = self.config.stages;
+        if stages == 0 {
+            return;
+        }
+        let reached = (self.drilled / self.config.crystals_per_stage).min(stages);
+        while self.stage < reached {
+            self.stage += 1;
+            let level = self.wave + self.stage + 1;
+            self.schedule_wave(level, true);
+            if self.stage == stages {
+                self.extraction_until = Some(self.tick + EXTRACTION_TICKS);
+            }
         }
     }
 
@@ -465,7 +594,11 @@ impl Simulation {
                 self.outcome = Some(Outcome::Defeat);
             }
         }
-        if self.wave == WAVES_TO_WIN && self.pending_spawns.is_empty() && self.enemies.is_empty() {
+        if self
+            .extraction_until
+            .is_some_and(|until| self.tick >= until)
+            && self.outcome.is_none()
+        {
             self.outcome = Some(Outcome::Victory);
         }
     }
@@ -516,6 +649,32 @@ impl Simulation {
         }
         hash
     }
+}
+
+/// Place le Cœur : un carré constructible, ni trop près ni trop loin du QG, atteignable par
+/// la Corruption (il faudra le défendre), et choisi « au hasard » d'après la graine.
+fn choose_core(map: &Map, field: &FlowField, hq: Tile) -> Option<Tile> {
+    let size = map.size as i32;
+    let (near, far) = ((size / 7).max(14), (size / 4).max(20));
+    let hq_center = Tile::new(hq.x + HQ_SIZE / 2, hq.y + HQ_SIZE / 2);
+    let site_ok = |t: Tile| {
+        (0..CORE_DRILL_SIZE).all(|dy| {
+            (0..CORE_DRILL_SIZE).all(|dx| {
+                let (x, y) = (t.x + dx, t.y + dy);
+                (0..size).contains(&x)
+                    && (0..size).contains(&y)
+                    && matches!(map.tile(x as u32, y as u32), Terrain::Plain | Terrain::Rock)
+            })
+        }) && field.distance(Tile::new(t.x + 1, t.y + 1)).is_some()
+    };
+    (0..size)
+        .flat_map(|y| (0..size).map(move |x| Tile::new(x, y)))
+        .filter(|t| {
+            let d2 = (t.x + 1 - hq_center.x).pow(2) + (t.y + 1 - hq_center.y).pow(2);
+            (near * near..=far * far).contains(&d2)
+        })
+        .filter(|t| site_ok(*t))
+        .min_by_key(|t| (rng::hash2(map.seed ^ 0xC0E0, t.x, t.y), *t))
 }
 
 /// Applique un coup et les effets de la gemme.
@@ -676,6 +835,84 @@ mod tests {
                 .message(gem_script::Lang::French)
                 .contains("pas de tour")
         );
+    }
+
+    #[test]
+    fn every_format_has_a_reachable_core_except_colony() {
+        for seed in [1, 7, 2026] {
+            for format in Format::ALL {
+                let sim = Simulation::with_format(seed, format);
+                assert_eq!(sim.map.size, format.config().map_size);
+                match format {
+                    Format::Colony => assert!(sim.core.is_none()),
+                    _ => {
+                        let core = sim.core.unwrap_or_else(|| panic!("{format:?} {seed}"));
+                        assert_eq!(
+                            sim.check_build(BuildingKind::CoreDrill, core),
+                            Err(BuildError::NotEnoughCrystals)
+                        );
+                        assert_eq!(
+                            sim.check_build(BuildingKind::Tower, Tile::new(core.x + 1, core.y + 1)),
+                            Err(BuildError::CoreSite)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drilling_triggers_boss_waves_then_extraction_and_victory() {
+        let mut sim = Simulation::with_format(5, Format::Scout);
+        let core = sim.core.unwrap();
+        sim.stock = 1000;
+        sim.queue(Command::Build {
+            kind: BuildingKind::CoreDrill,
+            tile: core,
+            dir: Dir::South,
+        });
+        sim.step();
+        let drill = sim.core_drill().unwrap().id;
+        let refuel = |sim: &mut Simulation| {
+            if let State::CoreDrill { fuel, .. } = &mut sim.buildings.get_mut(drill).unwrap().state
+            {
+                *fuel = 10;
+            }
+        };
+        let per_stage = sim.config.crystals_per_stage;
+        while sim.stage == 0 {
+            refuel(&mut sim);
+            sim.step();
+        }
+        assert_eq!(sim.drilled, per_stage);
+        // Le premier palier déclenche une vague avec des boss.
+        run(&mut sim, 30);
+        assert!(sim.enemies.iter().any(|e| e.boss));
+        while sim.extraction_until.is_none() {
+            refuel(&mut sim);
+            sim.enemies.clear();
+            sim.step();
+        }
+        assert_eq!(sim.drilling_percent(), 100);
+        while sim.outcome.is_none() {
+            sim.enemies.clear();
+            sim.step();
+        }
+        assert_eq!(sim.outcome, Some(Outcome::Victory));
+    }
+
+    #[test]
+    fn colony_is_endless() {
+        let mut sim = Simulation::with_format(3, Format::Colony);
+        assert_eq!(
+            sim.check_build(BuildingKind::CoreDrill, Tile::new(0, 0)),
+            Err(BuildError::NoCore)
+        );
+        sim.buildings.get_mut(sim.hq().id).unwrap().hp = i32::MAX / 2;
+        let day = sim.config.ticks_per_day as u64;
+        run(&mut sim, day * 4);
+        assert_eq!(sim.outcome, None);
+        assert_eq!(sim.wave, 4);
     }
 
     #[test]

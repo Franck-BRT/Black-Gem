@@ -51,10 +51,38 @@ impl Plugin for BuildPlugin {
                     mouse_build,
                     touch_build,
                     draw_preview,
+                    outline_core,
                 )
                     .chain(),
             );
     }
+}
+
+/// Tant que le Grand foreur n'est pas construit, le Cœur est entouré d'un contour violet.
+fn outline_core(
+    mut gizmos: Gizmos,
+    sim: Res<Sim>,
+    curvature: Res<CurrentCurvature>,
+    time: Res<Time<Real>>,
+) {
+    let Some(core) = sim.core else {
+        return;
+    };
+    if sim.core_drill().is_some() {
+        return;
+    }
+    let center = world::tile_to_world(&sim.map, Tile::new(core.x + 1, core.y + 1)) + Vec3::Y * 0.1;
+    let pulse = 1.0 + 0.5 * (time.elapsed_secs() * 3.0).sin();
+    let color = LinearRgba::rgb(2.5, 0.8, 5.0) * pulse;
+    let h = world::TILE_SIZE * 1.5;
+    let corners = [
+        center + Vec3::new(-h, 0.0, -h),
+        center + Vec3::new(h, 0.0, -h),
+        center + Vec3::new(h, 0.0, h),
+        center + Vec3::new(-h, 0.0, h),
+        center + Vec3::new(-h, 0.0, -h),
+    ];
+    gizmos.linestrip(corners.map(|p| bend(p, curvature.params)), color);
 }
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
@@ -69,6 +97,7 @@ fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<BuildState>) {
         (KeyCode::KeyG, Tool::Build(BuildingKind::Cutter)),
         (KeyCode::KeyF, Tool::Build(BuildingKind::Furnace)),
         (KeyCode::KeyT, Tool::Build(BuildingKind::Tower)),
+        (KeyCode::KeyO, Tool::Build(BuildingKind::CoreDrill)),
         (KeyCode::KeyX, Tool::Demolish),
         (KeyCode::KeyU, Tool::Unsocket),
     ];
@@ -105,6 +134,7 @@ fn building_height(kind: BuildingKind) -> f32 {
         BuildingKind::Furnace => 1.2,
         BuildingKind::Drill | BuildingKind::Cutter => 0.9,
         BuildingKind::Conveyor => 0.15,
+        BuildingKind::CoreDrill => 5.0,
     }
 }
 
@@ -199,13 +229,26 @@ fn path(from: Tile, to: Tile, default_dir: Dir) -> Vec<(Tile, Dir)> {
 }
 
 /// Cases concernées par l'action en cours (une seule, ou une ligne pendant un glisser).
-fn planned_tiles(state: &BuildState) -> Vec<(Tile, Dir)> {
+fn planned_tiles(state: &BuildState, core: Option<Tile>) -> Vec<(Tile, Dir)> {
     let Some(cursor) = state.cursor else {
         return Vec::new();
     };
     match (state.tool, state.drag_start) {
+        // Le Grand foreur « s'aimante » sur le Cœur dès que le pointeur en est proche.
+        (Some(Tool::Build(BuildingKind::CoreDrill)), _)
+            if core.is_some_and(|c| {
+                (cursor.x - c.x - 1).abs() <= 3 && (cursor.y - c.y - 1).abs() <= 3
+            }) =>
+        {
+            vec![(core.unwrap(), state.dir)]
+        }
         (Some(Tool::Build(BuildingKind::Conveyor) | Tool::Demolish), Some(start)) => {
             path(start, cursor, state.dir)
+        }
+        // Grand bâtiment : le pointeur en vise le centre.
+        (Some(Tool::Build(kind)), _) if kind.size() > 1 => {
+            let half = kind.size() / 2;
+            vec![(Tile::new(cursor.x - half, cursor.y - half), state.dir)]
         }
         _ => vec![(cursor, state.dir)],
     }
@@ -276,7 +319,7 @@ fn mouse_build(
     }
     if buttons.just_released(MouseButton::Left) {
         if state.drag_start.is_some() {
-            let tiles = planned_tiles(&state);
+            let tiles = planned_tiles(&state, sim.core);
             // Après une ligne, les clics suivants gardent l'orientation de la ligne.
             if let Some(&(_, dir)) = tiles.last()
                 && tiles.len() > 1
@@ -342,7 +385,7 @@ fn draw_preview(
     };
     let map = &sim.map;
     let mut budget = sim.stock;
-    for (tile, dir) in planned_tiles(&state) {
+    for (tile, dir) in planned_tiles(&state, sim.core) {
         let ok = match tool {
             Tool::Build(kind) => {
                 let ok = sim.check_build(kind, tile).is_ok() && budget >= kind.cost();
@@ -363,9 +406,14 @@ fn draw_preview(
             (_, false) => LinearRgba::rgb(3.0, 0.25, 0.25),
         };
 
-        let center = world::tile_to_world(map, tile) + Vec3::Y * 0.08;
+        let size = match tool {
+            Tool::Build(kind) => kind.size(),
+            _ => 1,
+        };
+        let center = world::tile_to_world(map, Tile::new(tile.x + size / 2, tile.y + size / 2))
+            + Vec3::Y * 0.08;
         let lift = |p: Vec3| bend(p, curvature.params);
-        let h = world::TILE_SIZE * 0.47;
+        let h = world::TILE_SIZE * (size as f32 / 2.0 - 0.03);
         let corners = [
             center + Vec3::new(-h, 0.0, -h),
             center + Vec3::new(h, 0.0, -h),
@@ -376,7 +424,7 @@ fn draw_preview(
         gizmos.linestrip(corners.map(lift), color);
 
         match tool {
-            Tool::Build(BuildingKind::Tower | BuildingKind::Hq)
+            Tool::Build(BuildingKind::Tower | BuildingKind::Hq | BuildingKind::CoreDrill)
             | Tool::Socket(_)
             | Tool::Unsocket => {}
             Tool::Build(_) => {

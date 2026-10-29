@@ -54,10 +54,12 @@ enum GameFn {
     Drop,
     Wait,
     Say,
+    Core,
+    Drilling,
 }
 
 /// Nom français, nom anglais, nombre d'arguments (min, max).
-const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 18] = [
+const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 20] = [
     (GameFn::MoveTo, &["aller_vers", "move_to"], 1, 2),
     (GameFn::Step, &["avancer", "step"], 1, 1),
     (GameFn::Position, &["position"], 0, 0),
@@ -81,6 +83,8 @@ const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 18] = [
     (GameFn::Drop, &["deposer", "déposer", "drop"], 0, 0),
     (GameFn::Wait, &["attendre", "wait"], 0, 1),
     (GameFn::Say, &["dire", "say", "print"], 0, usize::MAX),
+    (GameFn::Core, &["coeur", "cœur", "core"], 0, 0),
+    (GameFn::Drilling, &["forage", "drilling"], 0, 0),
 ];
 
 /// L'API des golems, pour le compilateur (et pour l'aide de l'éditeur).
@@ -216,6 +220,10 @@ pub struct World<'a> {
     pub enemies: &'a [Enemy],
     pub map_size: u32,
     pub tick: u64,
+    /// Centre du Cœur (s'il y en a un).
+    pub core: Option<Tile>,
+    /// Avancement du forage, en pour cent.
+    pub drilling_percent: u32,
 }
 
 impl Golem {
@@ -494,6 +502,8 @@ impl Host for GolemHost<'_, '_, '_> {
                 self.golem.action = Action::Wait(self.world.tick + ticks);
                 Ok(HostReply::Suspend)
             }
+            GameFn::Core => done(self.world.core.map_or(Value::None, position_value)),
+            GameFn::Drilling => done(Value::Int(self.world.drilling_percent as i64)),
             GameFn::Say => {
                 let text: Vec<String> = args.iter().map(Value::to_string).collect();
                 self.golem.say(text.join(" "));
@@ -504,7 +514,7 @@ impl Host for GolemHost<'_, '_, '_> {
 }
 
 /// Programmes d'exemple proposés dans l'éditeur (français, anglais).
-pub const TEMPLATES: [(&str, &str, &str); 3] = [
+pub const TEMPLATES: [(&str, &str, &str); 4] = [
     (
         "Ravitailleur",
         "# Ravitailleur : apporte des munitions aux tours qui en manquent.\n\
@@ -550,6 +560,27 @@ pub const TEMPLATES: [(&str, &str, &str); 3] = [
                      drop()\n            \
                      say(\"Gem set at\", x, y)\n    \
              wait(2)\n",
+    ),
+    (
+        "Mineur",
+        "# Mineur : apporte les cristaux des foreuses au Grand foreur.\n\
+         while True:\n    \
+             for x, y in foreuses():\n        \
+                 aller_vers(x, y)\n        \
+                 if prendre():\n            \
+                     aller_vers(coeur())\n            \
+                     deposer()\n            \
+                     dire(\"Forage :\", forage(), \"%\")\n    \
+             attendre(1)\n",
+        "# Miner: brings crystals from the drills to the Great drill.\n\
+         while True:\n    \
+             for x, y in drills():\n        \
+                 move_to(x, y)\n        \
+                 if take():\n            \
+                     move_to(core())\n            \
+                     drop()\n            \
+                     say(\"Drilling:\", drilling(), \"%\")\n    \
+             wait(1)\n",
     ),
     (
         "Patrouille",

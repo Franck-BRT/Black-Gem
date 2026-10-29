@@ -340,7 +340,7 @@ crates/
 | **M1** ✅ | Prototype jouable : foreuse → convoyeur → tour, 1 type d'ennemi, vagues nocturnes, victoire / défaite |
 | **M2** ✅ | Gemmes : 5 couleurs de filons, taillerie, fours de fusion, hybrides, inventaire et sertissage, effets (dégâts, éclair, poison, ralentissement, multi-cibles) |
 | **M3** ✅ | Langage `gem_script` (sous-ensemble Python, VM déterministe), golems-drones, éditeur avec pas à pas, modèles |
-| **M4** | Structure d'expédition : génération de planète, forage du cœur, extraction |
+| **M4** ✅ | Formats d'expédition (Éclaireur, Expédition, Grand forage, Colonie), écran de départ, Cœur et Grand foreur, paliers avec boss, extraction et décollage |
 | **M5** | L'Arche : méta-progression, recherche, bibliothèque de scripts          |
 | **M6** | Passe graphique « DSP » : HDR, bloom, matériaux, particules, jour/nuit  |
 | **M7** | Sous-ensemble Rust + Acte II (ownership comme mécanique)                |

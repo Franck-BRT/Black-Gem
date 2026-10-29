@@ -27,12 +27,14 @@ impl Plugin for ViewPlugin {
                 (
                     reset_views.run_if(on_message::<NewPlanet>),
                     sync_nests,
+                    sync_core_spire,
                     sync_buildings,
                     (
                         animate_drills,
                         animate_conveyor_items,
                         animate_cutters,
                         animate_furnaces,
+                        animate_core_drill,
                         aim_turrets,
                         light_tower_gems,
                     ),
@@ -65,6 +67,8 @@ struct Kit {
     gem_empty: Handle<CurvedMaterial>,
     furnace_idle: Handle<CurvedMaterial>,
     golem_error: Handle<CurvedMaterial>,
+    black_gem: Handle<CurvedMaterial>,
+    corruption_boss: Handle<CurvedMaterial>,
     golem_slow: Handle<CurvedMaterial>,
     corruption: Handle<CurvedMaterial>,
     corruption_poisoned: Handle<CurvedMaterial>,
@@ -93,6 +97,11 @@ struct KitMeshes {
     enemy: Handle<Mesh>,
     golem_body: Handle<Mesh>,
     golem_ring: Handle<Mesh>,
+    core_base: Handle<Mesh>,
+    pylon: Handle<Mesh>,
+    frame: Handle<Mesh>,
+    shaft: Handle<Mesh>,
+    core_ring: Handle<Mesh>,
 }
 
 #[derive(Resource, Default)]
@@ -124,6 +133,20 @@ struct CutterSaw(u32);
 
 #[derive(Component)]
 struct GolemRing(u32);
+
+#[derive(Component)]
+struct CoreShaft(u32);
+
+#[derive(Component)]
+struct CoreRing;
+
+/// La Gemme Noire, qui sort de terre à l'extraction.
+#[derive(Component)]
+struct BlackGemView;
+
+/// La flèche d'obsidienne qui marque le Cœur, cachée une fois le Grand foreur construit.
+#[derive(Component)]
+struct CoreSpire;
 
 #[derive(Component)]
 struct GolemCargo(u32);
@@ -197,6 +220,11 @@ fn create_kit(
             enemy: meshes.add(Sphere::new(0.45).mesh().ico(1).unwrap()),
             golem_body: meshes.add(Sphere::new(0.38).mesh().ico(2).unwrap()),
             golem_ring: meshes.add(Torus::new(0.5, 0.6)),
+            core_base: meshes.add(Cuboid::new(2.9, 0.3, 2.9)),
+            pylon: meshes.add(Cuboid::new(0.28, 3.8, 0.28)),
+            frame: meshes.add(Cuboid::new(2.2, 0.25, 2.2)),
+            shaft: meshes.add(Cylinder::new(0.32, 3.6).mesh().resolution(8)),
+            core_ring: meshes.add(Torus::new(0.9, 1.15)),
         },
         hull: material(StandardMaterial {
             base_color: Color::srgb(0.8, 0.82, 0.86),
@@ -255,6 +283,15 @@ fn create_kit(
                 ..default()
             })
         }),
+        black_gem: material(StandardMaterial {
+            base_color: Color::srgb(0.01, 0.0, 0.02),
+            emissive: LinearRgba::rgb(0.45, 0.04, 1.1),
+            metallic: 0.9,
+            perceptual_roughness: 0.05,
+            reflectance: 1.0,
+            ..default()
+        }),
+        corruption_boss: material(corruption_base(LinearRgba::rgb(4.0, 0.2, 0.3))),
         golem_error: material(glow(
             Color::srgb(1.0, 0.2, 0.2),
             LinearRgba::rgb(5.0, 0.4, 0.3),
@@ -521,6 +558,48 @@ fn sync_buildings(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut view
                     Transform::from_xyz(0.42, 0.18, 0.0),
                 ));
             }
+            BuildingKind::CoreDrill => {
+                parent.spawn((
+                    Mesh3d(m.core_base.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.15, 0.0),
+                ));
+                // Derrick : quatre pylônes inclinés vers un cadre au sommet.
+                for (sx, sz) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                    parent.spawn((
+                        Mesh3d(m.pylon.clone()),
+                        MeshMaterial3d(kit.hull.clone()),
+                        Transform::from_xyz(sx * 1.05, 2.0, sz * 1.05).with_rotation(
+                            Quat::from_rotation_z(sx * 0.12) * Quat::from_rotation_x(-sz * 0.12),
+                        ),
+                    ));
+                }
+                parent.spawn((
+                    Mesh3d(m.frame.clone()),
+                    MeshMaterial3d(kit.hull.clone()),
+                    Transform::from_xyz(0.0, 3.85, 0.0),
+                ));
+                parent.spawn((
+                    CoreShaft(id),
+                    Mesh3d(m.shaft.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 2.0, 0.0),
+                ));
+                parent.spawn((
+                    CoreRing,
+                    Mesh3d(m.core_ring.clone()),
+                    MeshMaterial3d(kit.glow_purple.clone()),
+                    Transform::from_xyz(0.0, 0.45, 0.0),
+                    NotShadowCaster,
+                ));
+                parent.spawn((
+                    BlackGemView,
+                    Mesh3d(m.gem.clone()),
+                    MeshMaterial3d(kit.black_gem.clone()),
+                    Transform::from_xyz(0.0, 5.5, 0.0).with_scale(Vec3::splat(2.2)),
+                    Visibility::Hidden,
+                ));
+            }
             BuildingKind::Hq => {}
         });
         views.buildings.insert(id, root.id());
@@ -766,7 +845,8 @@ fn sync_enemies(
         let from = world::pos_to_world(&sim.map, enemy.prev_pos);
         let to = world::pos_to_world(&sim.map, enemy.pos);
         let bob = 0.35 + 0.08 * (t * 6.0 + enemy.id as f32).sin();
-        let scale = 0.65 + 0.35 * enemy.hp.max(0) as f32 / enemy.max_hp as f32;
+        let scale = (0.65 + 0.35 * enemy.hp.max(0) as f32 / enemy.max_hp as f32)
+            * if enemy.boss { 2.2 } else { 1.0 };
         let transform = Transform::from_translation(from.lerp(to, alpha) + Vec3::Y * bob)
             .with_rotation(Quat::from_rotation_y(t * 1.5 + enemy.id as f32))
             .with_scale(Vec3::new(1.0, 0.8, 1.0) * scale);
@@ -775,7 +855,9 @@ fn sync_enemies(
                 if let Ok((mut current, mut material)) = transforms.get_mut(entity) {
                     *current = transform;
                     // Teinte selon l'effet subi : vert empoisonné, cyan ralenti.
-                    let wanted = if enemy.poison_ticks > 0 {
+                    let wanted = if enemy.boss {
+                        &kit.corruption_boss
+                    } else if enemy.poison_ticks > 0 {
                         &kit.corruption_poisoned
                     } else if enemy.slow_ticks > 0 {
                         &kit.corruption_slowed
@@ -967,5 +1049,105 @@ fn sync_golems(
             }
             None => *visibility = Visibility::Hidden,
         }
+    }
+}
+
+/// La flèche d'obsidienne du Cœur : de grands cristaux noirs qui luisent de violet.
+fn sync_core_spire(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    kit: Res<Kit>,
+    mut spawned_for: Local<Option<u64>>,
+    mut spires: Query<&mut Visibility, With<CoreSpire>>,
+) {
+    if *spawned_for != Some(sim.map.seed ^ sim.map.size as u64) {
+        *spawned_for = Some(sim.map.seed ^ sim.map.size as u64);
+        if let Some(core) = sim.core {
+            let center = world::tile_to_world(&sim.map, gem_sim::Tile::new(core.x + 1, core.y + 1));
+            commands
+                .spawn((
+                    PlanetEntity,
+                    CoreSpire,
+                    Transform::from_translation(center),
+                    Visibility::default(),
+                ))
+                .with_children(|parent| {
+                    for (i, (x, z, scale, tilt)) in [
+                        (0.0, 0.0, 3.2, 0.0),
+                        (0.7, 0.3, 1.8, 0.35),
+                        (-0.6, 0.5, 1.5, -0.4),
+                        (0.2, -0.7, 1.6, 0.3),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        parent.spawn((
+                            Mesh3d(kit.meshes.crystal.clone()),
+                            MeshMaterial3d(kit.black_gem.clone()),
+                            Transform::from_xyz(x, -0.1, z)
+                                .with_rotation(
+                                    Quat::from_rotation_y(i as f32 * 1.7)
+                                        * Quat::from_rotation_x(tilt),
+                                )
+                                .with_scale(Vec3::splat(scale)),
+                        ));
+                    }
+                    parent.spawn((
+                        PointLight {
+                            color: Color::srgb(0.6, 0.2, 1.0),
+                            intensity: 60_000.0,
+                            range: 16.0,
+                            ..default()
+                        },
+                        Transform::from_xyz(0.0, 3.5, 0.0),
+                    ));
+                });
+        }
+    }
+    let visible = if sim.core_drill().is_some() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    for mut visibility in &mut spires {
+        *visibility = visible;
+    }
+}
+
+/// Le Grand foreur : l'arbre tourne quand il a du combustible, l'anneau s'illumine avec
+/// l'avancement, et la Gemme Noire apparaît à l'extraction.
+#[allow(clippy::type_complexity)]
+fn animate_core_drill(
+    sim: Res<Sim>,
+    time: Res<Time>,
+    mut shafts: Query<(&CoreShaft, &mut Transform), (Without<CoreRing>, Without<BlackGemView>)>,
+    mut rings: Query<&mut Transform, (With<CoreRing>, Without<CoreShaft>, Without<BlackGemView>)>,
+    mut gems: Query<
+        (&mut Transform, &mut Visibility),
+        (With<BlackGemView>, Without<CoreShaft>, Without<CoreRing>),
+    >,
+) {
+    for (shaft, mut transform) in &mut shafts {
+        if let Some(BuildingState::CoreDrill { fuel, .. }) =
+            sim.buildings.get(shaft.0).map(|b| &b.state)
+            && *fuel > 0
+        {
+            transform.rotate_y(time.delta_secs() * 4.0);
+        }
+    }
+    let progress = sim.drilling_percent() as f32 / 100.0;
+    for mut transform in &mut rings {
+        transform.scale = Vec3::splat(0.6 + 0.8 * progress);
+        transform.translation.y = 0.45 + 2.8 * progress;
+    }
+    let extracted = sim.extraction_until.is_some();
+    for (mut transform, mut visibility) in &mut gems {
+        *visibility = if extracted {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        transform.rotate_y(time.delta_secs() * 0.8);
+        transform.translation.y = 5.5 + 0.3 * (time.elapsed_secs() * 1.5).sin();
     }
 }

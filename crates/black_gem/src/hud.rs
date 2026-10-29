@@ -6,7 +6,7 @@ use bevy::{
     prelude::*,
 };
 use gem_sim::{
-    BuildingKind, BuildingState, Gem, Outcome, TICKS_PER_DAY, TICKS_PER_SECOND, WAVES_TO_WIN,
+    BuildingKind, BuildingState, Gem, Outcome, TICKS_PER_SECOND,
     building::{CRYSTALS_PER_GEM, SHOTS_PER_CRYSTAL},
 };
 
@@ -25,6 +25,10 @@ struct HelpText;
 
 #[derive(Component)]
 struct ToastText;
+
+/// Grande annonce au centre-haut de l'écran.
+#[derive(Component)]
+struct AnnounceText;
 
 /// Description du bâtiment sous le pointeur.
 #[derive(Component)]
@@ -71,6 +75,7 @@ impl Plugin for HudPlugin {
                     update_tool_buttons,
                     update_toast,
                     update_info,
+                    announce_events,
                     update_inventory,
                     update_outcome,
                 ),
@@ -221,6 +226,7 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         Tool::Build(BuildingKind::Cutter),
                         Tool::Build(BuildingKind::Furnace),
                         Tool::Build(BuildingKind::Tower),
+                        Tool::Build(BuildingKind::CoreDrill),
                         Tool::Demolish,
                         Tool::Unsocket,
                     ];
@@ -254,6 +260,21 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                     }
                 });
         });
+
+    // En haut, au centre : annonces.
+    commands.spawn((
+        AnnounceText,
+        Text::default(),
+        text(&font, 26.0, Color::srgb(1.0, 0.85, 0.4)),
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(90.0),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+    ));
 
     // Au centre : victoire ou défaite.
     commands
@@ -299,7 +320,7 @@ fn update_status(
     mut text: Single<&mut Text, With<StatusText>>,
 ) {
     let lang = *language;
-    let day = sim.tick / TICKS_PER_DAY as u64 + 1;
+    let day = sim.tick / sim.config.ticks_per_day as u64 + 1;
     let minutes_of_day = sim.time_of_day() * 24 * 60 / 1000;
     let period = if sim.is_night() {
         lang.tr(Tr::NightTime)
@@ -317,22 +338,40 @@ fn update_status(
         .unwrap_or(0.0);
     let threat = if sim.is_night() && sim.wave > 0 {
         lang.tr(Tr::NightNow).to_string()
-    } else if sim.wave < WAVES_TO_WIN {
+    } else {
         format!(
             "{} {}",
             lang.tr(Tr::NightIn),
             format_duration(sim.ticks_until_nightfall())
         )
+    };
+    let c = lang.colon();
+    let objective = if sim.config.stages == 0 {
+        lang.tr(Tr::ColonyGoal).to_string()
+    } else if let Some(until) = sim.extraction_until {
+        format!(
+            "{} {}",
+            lang.tr(Tr::LiftOffIn),
+            format_duration(until.saturating_sub(sim.tick))
+        )
+    } else if sim.core_drill().is_none() {
+        lang.tr(Tr::BuildCoreDrill).to_string()
     } else {
-        String::new()
+        format!(
+            "{}{c}{} % · {} {} / {}",
+            lang.tr(Tr::Drilling),
+            sim.drilling_percent(),
+            lang.tr(Tr::Stage),
+            sim.stage,
+            sim.config.stages
+        )
     };
     let hq = sim.hq();
 
-    let c = lang.colon();
     text.0 = format!(
         "{}\n{} {} · {:02}:{:02} ({})\n\
          {}{c}{}   {}{c}{} / {}\n\
-         {} {} / {} · {} {}\n{}\n\
+         {} {} · {} {}\n{}\n{}\n\
          {}{c}{} · {}{c}{}   {:.0} FPS",
         lang.tr(Tr::Subtitle),
         lang.tr(Tr::Day),
@@ -345,18 +384,47 @@ fn update_status(
         lang.tr(Tr::HqHealth),
         hq.hp.max(0),
         hq.kind.max_hp(),
-        lang.tr(Tr::Wave),
+        lang.tr(Tr::Night),
         sim.wave,
-        WAVES_TO_WIN,
         sim.kills,
         lang.tr(Tr::Kills),
         threat,
+        objective,
         lang.tr(Tr::Seed),
         sim.map.seed,
         lang.tr(Tr::Speed),
         speed_label,
         fps,
     );
+}
+
+/// Annonce les grands moments de l'expédition (paliers, extraction) au centre de l'écran.
+fn announce_events(
+    sim: Res<Sim>,
+    language: Res<Language>,
+    time: Res<Time<Real>>,
+    mut seen: Local<(u64, u32, bool)>,
+    mut announcement: Local<Option<(Tr, f32)>>,
+    mut text: Single<&mut Text, With<AnnounceText>>,
+) {
+    let now = time.elapsed_secs();
+    let current = (sim.map.seed, sim.stage, sim.extraction_until.is_some());
+    if current.0 != seen.0 || current.1 < seen.1 {
+        // Nouvelle expédition : rien à annoncer.
+        *announcement = None;
+    } else if current.2 && !seen.2 {
+        *announcement = Some((Tr::Extracted, now + 6.0));
+    } else if current.1 > seen.1 {
+        *announcement = Some((Tr::StageReached, now + 5.0));
+    }
+    *seen = current;
+    let message = match *announcement {
+        Some((tr, until)) if now < until => language.tr(tr),
+        _ => "",
+    };
+    if text.0 != message {
+        text.0 = message.to_string();
+    }
 }
 
 fn update_help(language: Res<Language>, mut text: Single<&mut Text, With<HelpText>>) {
@@ -390,6 +458,7 @@ fn update_tool_buttons(
                     BuildingKind::Conveyor => "C",
                     BuildingKind::Cutter => "G",
                     BuildingKind::Furnace => "F",
+                    BuildingKind::CoreDrill => "O",
                     _ => "T",
                 };
                 let unit = language.tr(Tr::Crystals).to_lowercase();
@@ -485,6 +554,14 @@ fn update_info(
                         "{name}{c}{activity} ({}/2) {}",
                         held.len(),
                         held.join(" + ")
+                    )
+                }
+                BuildingState::CoreDrill { fuel, .. } => {
+                    format!(
+                        "{name}{c}{} {} % · {} {fuel}",
+                        lang.tr(Tr::Drilling).to_lowercase(),
+                        sim.drilling_percent(),
+                        lang.tr(Tr::Crystals).to_lowercase(),
                     )
                 }
                 BuildingState::Tower {

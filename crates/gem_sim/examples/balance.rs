@@ -35,7 +35,7 @@ fn play(seed: u64, towers: usize, grade: u8) -> String {
     }
     sim.stock = 1000;
     let mut dawn_hp = Vec::new();
-    while sim.outcome.is_none() && sim.tick < TICKS_PER_DAY as u64 * 5 {
+    while sim.outcome.is_none() && sim.tick < TICKS_PER_DAY as u64 * 4 {
         for id in sim.buildings.ids() {
             if let Some(b) = sim.buildings.get_mut(id)
                 && let BuildingState::Tower { crystals, .. } = &mut b.state

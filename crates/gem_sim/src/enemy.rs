@@ -12,6 +12,9 @@ use crate::{
 /// Distance (au QG) à partir de laquelle un ennemi attaque, en unités fines.
 const ATTACK_RANGE: i32 = 2 * UNITS_PER_TILE + UNITS_PER_TILE / 2;
 const ATTACK_DAMAGE: i32 = 10;
+/// Un boss vaut plusieurs ennemis : plus de vie, plus lent, plus de dégâts.
+const BOSS_HP_FACTOR: i32 = 10;
+const BOSS_DAMAGE: i32 = 40;
 const ATTACK_COOLDOWN: u32 = 30;
 /// Ticks entre deux apparitions au même nid.
 pub const SPAWN_INTERVAL: u64 = 25;
@@ -35,6 +38,9 @@ pub struct Enemy {
     /// Ralentissement actif, en pour cent, et ticks restants.
     pub slow_percent: i32,
     pub slow_ticks: u32,
+    /// Boss de palier.
+    pub boss: bool,
+    damage: i32,
 }
 
 /// Composition d'une vague.
@@ -44,12 +50,13 @@ pub struct WaveSpec {
     pub speed: i32,
 }
 
-/// Les vagues grossissent nuit après nuit.
-pub fn wave_spec(wave: u32) -> WaveSpec {
+/// Les vagues grossissent nuit après nuit ; `difficulty` en pour cent (selon le format).
+pub fn wave_spec(wave: u32, difficulty: u32) -> WaveSpec {
+    let hp = 30 + 30 * wave as i32 + 15 * (wave * wave) as i32;
     WaveSpec {
-        per_nest: 2 + 2 * wave,
-        hp: 30 + 30 * wave as i32 + 15 * (wave * wave) as i32,
-        speed: 36 + 3 * wave as i32,
+        per_nest: ((2 + 2 * wave) * difficulty).div_ceil(100),
+        hp: hp * difficulty as i32 / 100,
+        speed: (36 + 3 * wave as i32).min(60),
     }
 }
 
@@ -157,7 +164,20 @@ impl Enemy {
             poison_carry: 0,
             slow_percent: 0,
             slow_ticks: 0,
+            boss: false,
+            damage: ATTACK_DAMAGE,
         }
+    }
+
+    /// Boss de palier : bien plus résistant, lent, et il frappe fort.
+    pub fn boss(id: u32, pos: Pos, spec: &WaveSpec) -> Self {
+        let mut boss = Self::new(id, pos, spec);
+        boss.hp = spec.hp * BOSS_HP_FACTOR;
+        boss.max_hp = boss.hp;
+        boss.speed = spec.speed * 6 / 10;
+        boss.boss = true;
+        boss.damage = BOSS_DAMAGE;
+        boss
     }
 
     /// Empoisonne (le poison le plus fort l'emporte, sa durée repart à zéro).
@@ -197,7 +217,7 @@ impl Enemy {
         if self.pos.distance_sq(hq_center) <= (ATTACK_RANGE as i64).pow(2) {
             if self.attack_cooldown == 0 {
                 self.attack_cooldown = ATTACK_COOLDOWN;
-                return ATTACK_DAMAGE;
+                return self.damage;
             }
             return 0;
         }
@@ -239,7 +259,7 @@ mod tests {
 
     #[test]
     fn poison_hurts_over_time_and_slow_wears_off() {
-        let spec = wave_spec(1);
+        let spec = wave_spec(1, 100);
         let mut enemy = Enemy::new(1, Pos::new(0, 0), &spec);
         enemy.poison(30);
         enemy.slow(50);

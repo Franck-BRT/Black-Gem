@@ -28,6 +28,11 @@ const HQ_COOLDOWN: u32 = 24;
 
 /// Côté du carré occupé par le QG, en cases.
 pub const HQ_SIZE: i32 = 3;
+/// Côté du carré occupé par le Grand foreur, en cases.
+pub const CORE_DRILL_SIZE: i32 = 3;
+/// Le Grand foreur brûle un cristal toutes les `CORE_DRILL_PERIOD` ticks (1,5 s).
+pub const CORE_DRILL_PERIOD: u32 = 45;
+const CORE_DRILL_FUEL: u32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuildingKind {
@@ -39,22 +44,35 @@ pub enum BuildingKind {
     /// Four de fusion : deux gemmes de même grade deviennent une gemme du grade supérieur.
     Furnace,
     Tower,
+    /// Grand foreur : se construit sur le Cœur et creuse jusqu'à la Gemme Noire.
+    CoreDrill,
 }
 
 impl BuildingKind {
     /// Bâtiments que le joueur peut construire.
-    pub const BUILDABLE: [BuildingKind; 5] = [
+    pub const BUILDABLE: [BuildingKind; 6] = [
         BuildingKind::Drill,
         BuildingKind::Conveyor,
         BuildingKind::Cutter,
         BuildingKind::Furnace,
         BuildingKind::Tower,
+        BuildingKind::CoreDrill,
     ];
+
+    /// Côté du carré occupé, en cases.
+    pub const fn size(self) -> i32 {
+        match self {
+            BuildingKind::Hq => HQ_SIZE,
+            BuildingKind::CoreDrill => CORE_DRILL_SIZE,
+            _ => 1,
+        }
+    }
 
     /// Coût en cristaux.
     pub const fn cost(self) -> u32 {
         match self {
             BuildingKind::Hq => 0,
+            BuildingKind::CoreDrill => 60,
             BuildingKind::Drill => 10,
             BuildingKind::Conveyor => 1,
             BuildingKind::Cutter => 15,
@@ -66,6 +84,7 @@ impl BuildingKind {
     pub const fn max_hp(self) -> i32 {
         match self {
             BuildingKind::Hq => 600,
+            BuildingKind::CoreDrill => 800,
             BuildingKind::Drill => 120,
             BuildingKind::Conveyor => 40,
             BuildingKind::Cutter | BuildingKind::Furnace => 150,
@@ -110,6 +129,11 @@ pub enum BuildingState {
         /// Gemme sertie : elle donne à la tour sa couleur, ses effets et sa puissance.
         gem: Option<Gem>,
     },
+    CoreDrill {
+        /// Cristaux en réserve, brûlés un à un pour creuser.
+        fuel: u32,
+        timer: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -125,11 +149,7 @@ pub struct Building {
 
 impl Building {
     pub fn size(&self) -> i32 {
-        if self.kind == BuildingKind::Hq {
-            HQ_SIZE
-        } else {
-            1
-        }
+        self.kind.size()
     }
 
     /// Centre du bâtiment, en position fine.
@@ -186,6 +206,9 @@ impl Building {
                 *crystals < TOWER_MAX_CRYSTALS
             }
             (BuildingState::Tower { gem, .. }, Item::Gem(_)) => gem.is_none(),
+            (BuildingState::CoreDrill { fuel, .. }, Item::Crystal(_) | Item::Shard) => {
+                *fuel < CORE_DRILL_FUEL
+            }
             _ => false,
         }
     }
@@ -206,6 +229,7 @@ impl Building {
                 *crystals += 1
             }
             (BuildingState::Tower { gem: slot, .. }, Item::Gem(gem)) => *slot = Some(gem),
+            (BuildingState::CoreDrill { fuel, .. }, _) => *fuel += 1,
             _ => unreachable!("objet refusé par `accepts`"),
         }
     }
@@ -215,6 +239,8 @@ impl Building {
 pub struct Storage<'a> {
     pub crystals: &'a mut u32,
     pub gems: &'a mut Vec<Gem>,
+    /// Cristaux brûlés par le Grand foreur depuis le début de l'expédition.
+    pub drilled: &'a mut u32,
 }
 
 /// Pourquoi une construction est refusée.
@@ -225,6 +251,12 @@ pub enum BuildError {
     Water,
     NeedsCrystalVein,
     NotEnoughCrystals,
+    /// Le Grand foreur ne se construit que sur le Cœur.
+    NeedsCore,
+    /// Le Cœur est réservé au Grand foreur.
+    CoreSite,
+    /// Pas de Cœur à forer dans ce format (Colonie).
+    NoCore,
 }
 
 /// Tous les bâtiments, dans un ordre déterministe (par identifiant).
@@ -282,7 +314,7 @@ impl Buildings {
 
     /// Vérifie qu'un bâtiment peut être posé ici (sans tenir compte du coût).
     pub fn check_site(&self, map: &Map, kind: BuildingKind, tile: Tile) -> Result<(), BuildError> {
-        let size = if kind == BuildingKind::Hq { HQ_SIZE } else { 1 };
+        let size = kind.size();
         for dy in 0..size {
             for dx in 0..size {
                 let t = Tile::new(tile.x + dx, tile.y + dy);
@@ -308,6 +340,7 @@ impl Buildings {
         self.next_id += 1;
         let state = match kind {
             BuildingKind::Hq => BuildingState::Hq { cooldown: 0 },
+            BuildingKind::CoreDrill => BuildingState::CoreDrill { fuel: 0, timer: 0 },
             BuildingKind::Drill => BuildingState::Drill {
                 color: map.vein_color(tile.x as u32, tile.y as u32),
                 timer: 0,
@@ -508,6 +541,20 @@ impl Buildings {
                         output,
                     }
                 }
+                BuildingState::CoreDrill { fuel, timer } if fuel > 0 => {
+                    if timer + 1 >= CORE_DRILL_PERIOD {
+                        *storage.drilled += 1;
+                        BuildingState::CoreDrill {
+                            fuel: fuel - 1,
+                            timer: 0,
+                        }
+                    } else {
+                        BuildingState::CoreDrill {
+                            fuel,
+                            timer: timer + 1,
+                        }
+                    }
+                }
                 BuildingState::Tower {
                     crystals,
                     charge: 0,
@@ -551,6 +598,7 @@ mod tests {
             buildings.update_logistics(&mut Storage {
                 crystals: &mut crystals,
                 gems: &mut gems,
+                drilled: &mut 0,
             });
         }
         (crystals, gems)
@@ -610,6 +658,7 @@ mod tests {
             &mut Storage {
                 crystals: &mut 0,
                 gems: &mut Vec::new(),
+                drilled: &mut 0,
             },
         );
         // Un grade différent est refusé, le même grade est accepté.
@@ -620,6 +669,7 @@ mod tests {
             &mut Storage {
                 crystals: &mut 0,
                 gems: &mut Vec::new(),
+                drilled: &mut 0,
             },
         );
 

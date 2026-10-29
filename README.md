@@ -6,10 +6,23 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M3 — le code
+## État actuel : prototype M4 — les expéditions
 
-**Objectif : tenir trois nuits.** Chaque nuit, la Corruption sort de ses nids (en rouge, au bord
-de la carte) et marche sur le QG. Il faut une usine, des gemmes… et des **golems programmés**.
+Au lancement, on **choisit son expédition** selon le temps dont on dispose, et la planète
+(numéro ou au hasard) :
+
+| Format | Durée | Carte | Journée | Objectif |
+|--------|-------|-------|---------|----------|
+| Éclaireur | ~15 min | 128 × 128 | 3 min | 2 paliers de forage |
+| Expédition | 30–45 min | 192 × 192 | 6 min | 4 paliers |
+| Grand forage | 60–90 min | 224 × 224 | 8 min | 6 paliers |
+| Colonie | sans limite | 224 × 224 | 6 min | survivre |
+
+**Objectif** : construire le **Grand foreur** (touche **O**) sur le **Cœur** (la flèche
+d'obsidienne entourée de violet, touche **V** pour y aller), et l'alimenter en cristaux
+(convoyeurs ou golems). Chaque **palier** franchi réveille une vague majeure avec des **boss**.
+À 100 %, la **Gemme Noire** sort de terre : il faut tenir jusqu'au **décollage** (1 min).
+Chaque nuit, la Corruption attaque plus fort.
 
 **Les golems** sont des drones fabriqués au QG (15 cristaux, panneau en bas à droite). Clic sur
 un golem pour ouvrir son **éditeur de code** et lui écrire un programme en **Python** :
@@ -32,7 +45,8 @@ while True:
   s'affichent, le mode **pas à pas** exécute une instruction à la fois.
 - Les **erreurs** sont expliquées en français ou en anglais, avec la ligne et une suggestion
   (« le nom « stoc » est inconnu — voulais-tu écrire « stock » ? »).
-- Trois **modèles** prêts à l'emploi : Ravitailleur, Sertisseur, Patrouille.
+- Quatre **modèles** prêts à l'emploi : Ravitailleur, Sertisseur, Mineur (alimente le Grand
+  foreur), Patrouille. Fonctions `coeur()` / `core()` et `forage()` / `drilling()` pour l'objectif.
 
 **Les gemmes** : cinq couleurs de filons (rouge : dégâts, jaune : éclair en chaîne, vert : poison,
 cyan : ralentissement, violet : multi-cibles). Taillerie : 3 cristaux → gemme de grade 1. Four :
@@ -46,13 +60,16 @@ Déjà en place :
   la gemme d'une tour démolie revient dans l'inventaire) ;
 - effets des gemmes, rayons colorés, ennemis teintés quand ils sont empoisonnés ou ralentis ;
 - golems programmables en Python, éditeur intégré, exécution visible pas à pas ;
-- vagues nocturnes de plus en plus fortes, victoire / défaite ;
+- quatre formats d'expédition (15 min à sans limite), Cœur, Grand foreur, paliers et boss,
+  extraction de la Gemme Noire et décollage, victoire / défaite ;
 - cycle jour/nuit, ombres, cristaux lumineux (HDR + bloom), brouillard ;
 - interface en français ou en anglais (touche **L**), utilisable au clavier, à la souris ou au doigt.
 
 | Touche | Action |
 |--------|--------|
 | B / C / G / F / T | Foreuse / convoyeur / taillerie / four / tour |
+| O | Grand foreur (sur le Cœur) |
+| V | Aller au Cœur |
 | X | Démolir |
 | Clic sur une gemme, puis sur une tour | Sertir |
 | U | Retirer la gemme d'une tour |
@@ -68,7 +85,8 @@ Déjà en place :
 | H | Retour au QG |
 | Espace | Pause |
 | 1 / 2 / 3 | Vitesse ×1 / ×5 / ×20 |
-| N | Nouvelle planète |
+| N | Nouvelle expédition |
+| Entrée (écran de départ) | Atterrir |
 | L | Langue FR / EN |
 
 ## Jouer
