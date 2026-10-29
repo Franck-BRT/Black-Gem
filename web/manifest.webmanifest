@@ -1,0 +1,10 @@
+{
+  "name": "Black Gem",
+  "short_name": "Black Gem",
+  "description": "Tower defense, automatisation et apprentissage du code.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0b0612",
+  "theme_color": "#0b0612"
+}

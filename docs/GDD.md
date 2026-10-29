@@ -1,8 +1,9 @@
-# Black Gem — Game Design Document (v0.1)
+# Black Gem — Game Design Document (v0.2)
 
 > Tower defense + automatisation + apprentissage du code (Python puis Rust).
 > Fusion des scénarios **1 (Forge des Cristaux)**, **3 (Planète Rouille)** et des
-> **parties courtes du 5 (Convoi)**. Direction artistique inspirée de **Dyson Sphere Program**.
+> **parties courtes du 5 (Convoi)**, avec des systèmes de **RTS classiques** (Red Alert, Warcraft).
+> Direction artistique inspirée de **Dyson Sphere Program**.
 
 ---
 
@@ -26,14 +27,17 @@ la Gemme Noire du cœur de la planète et repartir en orbite avant d'être subme
    la défense. Une usine mal pensée = une défense qui s'effondre.
 3. **Le code est un super-pouvoir** (7 Billion Humans / The Farmer Was Replaced) : tout
    peut se faire à la main, mais le code permet d'aller 10× plus loin.
-4. **Parties courtes, progression longue** (roguelite) : une expédition dure 30–45 min,
-   la méta-progression dure des dizaines d'heures.
+4. **Parties à la carte, progression longue** (roguelite) : le joueur choisit une
+   expédition selon le temps dont il dispose, de 15 min à plus d'une heure ; la
+   méta-progression dure des dizaines d'heures.
 5. **Beau à regarder tourner** (Dyson Sphere Program) : chaque usine doit être un
    spectacle de lumière, de mouvement et de particules.
+6. **L'âme des RTS d'antan** (Red Alert, Warcraft) : base, énergie, arbre technologique,
+   héros, armées, escarmouches, parties en réseau local.
 
 ## 3. Boucle de jeu
 
-### 3.1 Boucle d'une expédition (30–45 min)
+### 3.1 Boucle d'une expédition
 
 ```
 Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ──► Défense
@@ -56,20 +60,70 @@ Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ─
 8. **Extraction** : à 100 %, la Gemme Noire est extraite → décollage → retour à l'Arche
    avec le butin. En cas d'échec, on garde une partie des connaissances.
 
-### 3.2 Méta-progression (L'Arche)
+### 3.2 Durée des expéditions
+
+Plusieurs formats sont **toujours** proposés sur la carte stellaire, pour que le joueur
+choisisse selon sa disponibilité :
+
+| Format      | Durée     | Contenu                                                     |
+|-------------|-----------|-------------------------------------------------------------|
+| Éclaireur   | ~15 min   | Petite carte, 2 paliers de forage, pas de cycle nuit complet |
+| Expédition  | 30–45 min | Format standard, 4 paliers, 1 à 2 nuits                     |
+| Grand forage| 60–90 min | Grande carte, 6 paliers, plusieurs boss, usine complexe     |
+| Colonie     | sans limite | Bac à sable : on reste tant qu'on survit, sauvegarde libre |
+
+La durée change la taille de la carte, le nombre de paliers et la longueur du cycle
+jour/nuit, mais pas les règles : ce qu'on apprend dans un format sert dans tous les autres.
+Une expédition peut être sauvegardée et reprise plus tard.
+
+### 3.3 Méta-progression (L'Arche)
 
 - **Arbre de recherche** : nouveaux bâtiments, tours, couleurs de gemmes.
 - **Codex des gemmes** : chaque nouvelle combinaison découverte est enregistrée.
 - **Bibliothèque de scripts** : tes programmes sont **conservés** d'une partie à l'autre.
   Un bon script écrit une fois = un avantage permanent.
 - **Grimoire du code** : les fonctionnalités du langage se débloquent en progressant
-  (voir §6). On n'apprend pas tout d'un coup.
+  (voir §7). On n'apprend pas tout d'un coup.
 - **Carte stellaire** : planètes de difficulté croissante, biomes variés (glace, lave,
   jungle cristalline, désert de rouille, géante gazeuse avec plateformes).
 
-## 4. Système de gemmes
+### 3.4 Histoire et modes de jeu
 
-### 4.1 Couleurs (8)
+- **Campagne** : une histoire scénarisée, avec des briefings de mission à l'ancienne
+  (portrait animé, carte tactique, objectifs) entre les expéditions. Elle introduit
+  progressivement les mécaniques et le code.
+- **Expéditions libres** : génération procédurale, méta-progression roguelite.
+- **Escarmouche** : une carte, des adversaires (IA ou joueurs), réglages libres.
+- **Défis de code** : puzzles courts à la Human Resource Machine, avec classement
+  (taille du programme, vitesse d'exécution).
+
+## 4. Systèmes de RTS classiques
+
+Clin d'œil assumé à Red Alert, Warcraft, StarCraft et Age of Empires :
+
+- **Barre de construction latérale** (Red Alert) : on choisit un bâtiment, il se
+  construit, puis on le pose.
+- **Énergie** (Red Alert) : centrales et réseau électrique. En sous-production, les tours
+  tirent moins vite et les radars s'éteignent. Couper l'énergie de l'ennemi devient une tactique.
+- **Collecteurs** (Red Alert) : des véhicules qui récoltent le cristal en surface et le
+  ramènent à la raffinerie, en complément des foreuses fixes.
+- **Arbre technologique à prérequis** (Warcraft) : la forge nécessite la raffinerie,
+  le laboratoire de fusion nécessite la forge, etc.
+- **Héros** (Warcraft III) : le Forgeron-Ingénieur est une unité sur le terrain, qui gagne
+  des niveaux et lance des pouvoirs liés aux gemmes (onde de gel, pluie de cristaux…).
+- **Unités et armées** : sélection au cadre, groupes (Ctrl+1…9), ordres de patrouille,
+  formations. Les armées complètent les tours pour aller détruire les nids.
+- **Ravitaillement / population** (Warcraft, StarCraft) : chaque unité consomme du
+  ravitaillement ; il faut construire des habitats.
+- **Brouillard de guerre** : la carte se découvre en explorant ; radars et éclaireurs.
+- **Factions** : les Forgerons (gemmes, tours), les Colons (industrie lourde, unités
+  blindées) et, en escarmouche, la Corruption jouable (essaim, expansion organique).
+- **Programmer son armée** : les ordres d'unité sont aussi accessibles par le code
+  (`for soldat in groupe(1): soldat.patrouiller(a, b)`).
+
+## 5. Système de gemmes
+
+### 5.1 Couleurs (8)
 
 | Couleur  | Effet principal                          | Rôle                |
 |----------|------------------------------------------|---------------------|
@@ -82,7 +136,7 @@ Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ─
 | Violet   | Multi-cibles, rebonds                    | Couverture de zone  |
 | **Noire**| Retourne la Corruption contre elle-même  | Fin de partie       |
 
-### 4.2 Grade et fusion
+### 5.2 Grade et fusion
 
 - Deux gemmes de grade *n* → une gemme de grade *n+1* (coût exponentiel, puissance
   plus qu'exponentielle — comme GemCraft).
@@ -90,14 +144,14 @@ Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ─
 - La fusion se fait dans des **Fours de fusion** : c'est une chaîne de production, pas
   un clic. Automatiser la fusion des hauts grades est un vrai défi d'ingénierie.
 
-### 4.3 Où vont les gemmes
+### 5.3 Où vont les gemmes
 
 - **Tours** : la gemme sertie définit l'effet de la tour.
 - **Pièges / pylônes** : effets de zone sur les chemins.
 - **Bâtiments** : une gemme orange dans une foreuse = bonus de production, etc.
 - **Bombes de gemmes** : on peut sacrifier une gemme pour une explosion massive.
 
-## 5. Ennemis : la Corruption
+## 6. Ennemis : la Corruption
 
 - **Rampants** : nombreux, faibles, suivent les chemins.
 - **Blindés** : lents, résistants (→ gemmes bleues).
@@ -107,9 +161,9 @@ Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ─
   repousser pour accéder à certains filons.
 - **Boss de palier** : un par palier de forage, mécaniques uniques.
 
-## 6. Apprentissage du code
+## 7. Apprentissage du code
 
-### 6.1 Principe
+### 7.1 Principe
 
 - Les **golems-drones** et les **runes de contrôle** (posées sur des bâtiments)
   exécutent du code.
@@ -120,7 +174,7 @@ Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ─
   efficace est récompensé.
 - Messages d'erreur **pédagogiques**, en français, avec indice.
 
-### 6.2 Progression Python (Acte I)
+### 7.2 Progression Python (Acte I)
 
 1. Appels de fonctions (`miner()`, `aller_vers(cible)`)
 2. Variables
@@ -130,7 +184,7 @@ Atterrissage ──► Prospection ──► Usine ──► Forge de gemmes ─
 6. Listes et dictionnaires
 7. Classes simples
 
-### 6.3 Progression Rust (Acte II)
+### 7.3 Progression Rust (Acte II)
 
 Débloqué quand on atteint les planètes « industrielles » : les machines lourdes
 n'acceptent que du Rust (plus rapide = plus d'instructions par seconde).
@@ -146,7 +200,7 @@ n'acceptent que du Rust (plus rapide = plus d'instructions par seconde).
 7. Traits, itérateurs
 8. Concurrence (plusieurs golems coordonnés)
 
-### 6.4 Exemple : le même golem, dans les deux langages
+### 7.4 Exemple : le même golem, dans les deux langages
 
 ```python
 # Golem de ravitaillement
@@ -173,17 +227,53 @@ loop {
 }
 ```
 
-### 6.5 Mobile
+### 7.5 Langue du code : français ou anglais
+
+Le joueur choisit dans les options la langue de l'**API du jeu** (les mots-clés de Python
+et de Rust restent ceux des vrais langages) :
+
+| Français                  | Anglais                  |
+|---------------------------|--------------------------|
+| `aller_vers(tour)`        | `move_to(tower)`         |
+| `tour_la_plus_faible()`   | `weakest_tower()`        |
+| `entrepot.prendre("jaune")` | `storage.take("yellow")` |
+| `Couleur::Jaune`          | `Color::Yellow`          |
+
+Les deux noms désignent la même fonction : un script écrit en français fonctionne pour
+un joueur en anglais, et l'éditeur peut **traduire un script** d'une langue à l'autre
+(utile pour passer ensuite à du vrai code, presque toujours écrit en anglais).
+L'interface du jeu est elle aussi disponible en français et en anglais.
+
+### 7.6 Mobile
 
 Sur iPhone, l'éditeur propose un **mode blocs/cartes** (on assemble les instructions
 au doigt) qui génère le même code texte. Sur ordinateur, éditeur texte complet avec
 coloration et autocomplétion.
 
-## 7. Direction artistique (inspiration Dyson Sphere Program)
+## 8. Multijoueur
+
+- **Coopération** (2 à 4 joueurs) : une expédition partagée, chacun son QG ou une base commune.
+- **Escarmouche / versus** : factions contre factions, ou une équipe contre la Corruption
+  jouée par un autre joueur.
+- **Réseau local (LAN)**, comme à l'époque : découverte automatique des parties sur le
+  réseau, sans compte ni serveur. Clin d'œil aux LAN parties de Warcraft et Red Alert.
+- **En ligne** : parties privées par code d'invitation.
+- **Technique** : *lockstep* déterministe, comme les RTS classiques — seules les commandes
+  des joueurs circulent sur le réseau, chaque machine calcule la même partie. C'est pourquoi
+  la simulation est déterministe **dès le premier jour** (entiers, pas de flottants, hasard
+  à graine ; vérifié par des tests sur Windows, Linux et macOS).
+- **Limite du web** : un navigateur ne peut pas faire de découverte LAN. La version web
+  rejoindra les parties en ligne (WebRTC / WebSocket) ; le LAN est réservé aux versions
+  ordinateur.
+
+## 9. Direction artistique (inspiration Dyson Sphere Program)
 
 - **3D**, caméra orbitale libre (zoom de la vue d'ensemble jusqu'au niveau d'un golem).
 - **Planète** : terrain avec **courbure d'horizon simulée par shader** (look « petite
   planète » de DSP, tout en gardant une grille de construction plate et simple).
+  La courbure **dépend de l'angle de la caméra** : vue de dessus (pour construire), le
+  monde est plat ; en inclinant la caméra vers l'horizon ou en dézoomant, la planète
+  s'arrondit progressivement.
 - **Lumière** : rendu HDR, **bloom** sur les gemmes et les machines, matériaux PBR
   (métal brossé, cristal, verre), ombres dynamiques, cycle jour/nuit.
 - **Gemmes** : matériau émissif avec pseudo-réfraction, scintillement, halo coloré.
@@ -193,9 +283,9 @@ coloration et autocomplétion.
 - **Ciel** : skybox avec la géante gazeuse / l'étoile du système, L'Arche visible en orbite.
 - **Préréglages qualité** : Ultra (PC), Moyen (Mac portable), Mobile (iPhone).
 
-## 8. Architecture technique
+## 10. Architecture technique
 
-### 8.1 Choix
+### 10.1 Choix
 
 | Sujet           | Choix                                                            |
 |-----------------|------------------------------------------------------------------|
@@ -205,18 +295,18 @@ coloration et autocomplétion.
 | Simulation      | Tick fixe, **déterministe**, séparée du rendu (tests, replays)   |
 | Sauvegardes     | Fichiers locaux (desktop) / stockage navigateur (web)            |
 
-### 8.2 Organisation du code (workspace Cargo)
+### 10.2 Organisation du code (workspace Cargo)
 
 ```
 crates/
-  gem_sim/      # Simulation pure : carte, usine, gemmes, ennemis, vagues (sans rendu)
+  gem_sim/      # Simulation pure et déterministe : carte, usine, gemmes, ennemis, vagues
+  black_gem/    # Le jeu : rendu Bevy, caméra, interface (desktop + wasm)
+  # À venir :
   gem_script/   # Lexer/parseurs Python & Rust, compilateur bytecode, VM sandboxée
-  gem_render/   # Rendu Bevy : terrain, shaders, gemmes, particules, caméra
-  gem_ui/       # Interfaces : HUD, éditeur de code, codex, Arche
-  black_gem/    # Binaire final (desktop + wasm)
+  gem_net/      # Lockstep, LAN, en ligne
 ```
 
-### 8.3 Plateformes « sans installation »
+### 10.3 Plateformes « sans installation »
 
 | Plateforme | Livraison                                                          |
 |------------|--------------------------------------------------------------------|
@@ -226,11 +316,11 @@ crates/
 | Web        | WebAssembly + WebGPU (repli WebGL2), jouable dans le navigateur    |
 | iPhone/iPad| Version web dans Safari, installable sur l'écran d'accueil (PWA)   |
 
-## 9. Feuille de route
+## 11. Feuille de route
 
 | Jalon | Contenu                                                                  |
 |-------|--------------------------------------------------------------------------|
-| **M0** | Squelette : workspace, fenêtre Bevy 3D, terrain, caméra, build desktop + web en CI |
+| **M0** ✅ | Squelette : workspace, planète 3D procédurale, courbure dynamique, caméra RTS, jour/nuit, FR/EN, builds desktop + web en CI |
 | **M1** | Prototype jouable : foreuse → convoyeur → tour, 1 type d'ennemi, vagues |
 | **M2** | Gemmes : couleurs, fusion, sertissage, fours de fusion                  |
 | **M3** | VM de script + sous-ensemble Python + golems-drones + éditeur          |
@@ -239,10 +329,18 @@ crates/
 | **M6** | Passe graphique « DSP » : HDR, bloom, matériaux, particules, jour/nuit  |
 | **M7** | Sous-ensemble Rust + Acte II (ownership comme mécanique)                |
 | **M8** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
+| **M9** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions   |
+| **M10** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |
+| **M11** | Campagne scénarisée et briefings                                      |
 
-## 10. Questions ouvertes
+## 12. Décisions prises
 
-- Langue de l'API du jeu : français (`aller_vers`), anglais (`move_to`), ou les deux ?
-- Durée cible d'une expédition : 20, 30–45 ou 60+ minutes ?
-- Mode multijoueur coopératif un jour ? (impacte l'architecture déterministe dès M0)
-- Narration : histoire scénarisée (campagne) ou purement systémique ?
+| Sujet | Décision |
+|-------|----------|
+| Langue de l'API du jeu | Au choix du joueur : français ou anglais (§7.5) |
+| Durée des expéditions | De 15 min à plus d'une heure, plusieurs formats toujours disponibles (§3.2) |
+| Multijoueur | Plus tard : coop et versus, en LAN et en ligne ; simulation déterministe dès M0 (§8) |
+| Histoire | Les deux : campagne scénarisée et modes systémiques (§3.4) |
+| Inspirations RTS | Red Alert, Warcraft, StarCraft, Age of Empires (§4) |
+| Courbure de la planète | Dynamique selon l'angle et le zoom de la caméra (§9) |
+| Graphisme | 3D façon Dyson Sphere Program |

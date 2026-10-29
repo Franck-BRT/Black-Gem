@@ -1,0 +1,13 @@
+[package]
+name = "black_gem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gem_sim.workspace = true
+bevy.workspace = true
+
+[features]
+# Version web avec WebGPU (sinon WebGL2). Sans effet sur les versions ordinateur.
+webgpu = ["bevy/webgpu"]

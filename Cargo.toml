@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/gem_sim", "crates/black_gem"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+gem_sim = { path = "crates/gem_sim" }
+bevy = "0.20.1"
+
+# Compilation plus rapide en dev : nos crates en opt-level 1, les dépendances optimisées.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+# Build web : binaire le plus petit possible.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+strip = true
