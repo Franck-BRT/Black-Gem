@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
+    expedition::Bonuses,
     gem::{Gem, GemColor, Item, MAX_GRADE, TowerProfile},
     geom::{Dir, Pos, Tile, UNITS_PER_TILE},
     map::{Map, Terrain},
@@ -144,6 +145,7 @@ pub struct Building {
     pub tile: Tile,
     pub dir: Dir,
     pub hp: i32,
+    pub max_hp: i32,
     pub state: BuildingState,
 }
 
@@ -186,13 +188,13 @@ impl Building {
     }
 
     /// Peut-il recevoir cet objet venant de `from` ?
-    fn accepts(&self, from: Tile, item: Item) -> bool {
+    fn accepts(&self, from: Tile, item: Item, rules: &Bonuses) -> bool {
         match (&self.state, item) {
             (BuildingState::Hq { .. }, _) => true,
             // Un convoyeur n'accepte rien par sa sortie.
             (BuildingState::Conveyor { item }, _) => item.is_none() && self.output_tile() != from,
             (BuildingState::Cutter { counts, .. }, Item::Crystal(color)) => {
-                counts[color.index()] < CRYSTALS_PER_GEM
+                counts[color.index()] < rules.crystals_per_gem
             }
             (BuildingState::Furnace { slots, .. }, Item::Gem(gem)) => {
                 gem.grade < MAX_GRADE
@@ -269,16 +271,19 @@ pub struct Buildings {
     next_id: u32,
     /// Incrémenté à chaque construction ou démolition (pour le rendu).
     pub version: u64,
+    /// Règles de l'expédition (cadences, coûts…), modifiées par la recherche.
+    pub rules: Bonuses,
 }
 
 impl Buildings {
-    pub fn new(map_size: u32) -> Self {
+    pub fn new(map_size: u32, rules: Bonuses) -> Self {
         Self {
             by_id: BTreeMap::new(),
             grid: vec![0; (map_size * map_size) as usize],
             size: map_size as i32,
             next_id: 1,
             version: 0,
+            rules,
         }
     }
 
@@ -369,7 +374,18 @@ impl Buildings {
             kind,
             tile,
             dir,
-            hp: kind.max_hp(),
+            hp: kind.max_hp()
+                + if kind == BuildingKind::Hq {
+                    self.rules.hq_hp
+                } else {
+                    0
+                },
+            max_hp: kind.max_hp()
+                + if kind == BuildingKind::Hq {
+                    self.rules.hq_hp
+                } else {
+                    0
+                },
             state,
         };
         let size = building.size();
@@ -420,7 +436,7 @@ impl Buildings {
             return false;
         };
         // Déposé « d'en haut » : on fait comme s'il venait de la case elle-même.
-        if !building.accepts(tile.step(building.dir.opposite()), item) {
+        if !building.accepts(tile.step(building.dir.opposite()), item, &self.rules) {
             return false;
         }
         building.receive(item, storage);
@@ -436,7 +452,7 @@ impl Buildings {
         let Some(target) = self.by_id.get_mut(&self.grid[index]) else {
             return false;
         };
-        if !target.accepts(from, item) {
+        if !target.accepts(from, item, &self.rules) {
             return false;
         }
         target.receive(item, storage);
@@ -465,7 +481,7 @@ impl Buildings {
                 } => {
                     if buffer < DRILL_BUFFER {
                         timer += 1;
-                        if timer >= DRILL_PERIOD {
+                        if timer >= self.rules.drill_period {
                             timer = 0;
                             buffer += 1;
                         }
@@ -482,7 +498,7 @@ impl Buildings {
                 BuildingState::Conveyor {
                     item: Some((item, progress)),
                 } => {
-                    let item = if progress < CONVEYOR_TICKS {
+                    let item = if progress < self.rules.conveyor_ticks {
                         Some((item, progress + 1))
                     } else if self.hand_over(from, to, item, storage) {
                         None
@@ -508,9 +524,9 @@ impl Buildings {
                         None => {
                             if let Some(color) = GemColor::ALL
                                 .into_iter()
-                                .find(|c| counts[c.index()] >= CRYSTALS_PER_GEM)
+                                .find(|c| counts[c.index()] >= self.rules.crystals_per_gem)
                             {
-                                counts[color.index()] -= CRYSTALS_PER_GEM;
+                                counts[color.index()] -= self.rules.crystals_per_gem;
                                 cutting = Some((color, 0));
                             }
                         }
@@ -542,7 +558,7 @@ impl Buildings {
                     }
                 }
                 BuildingState::CoreDrill { fuel, timer } if fuel > 0 => {
-                    if timer + 1 >= CORE_DRILL_PERIOD {
+                    if timer + 1 >= self.rules.core_drill_period {
                         *storage.drilled += 1;
                         BuildingState::CoreDrill {
                             fuel: fuel - 1,
@@ -608,7 +624,7 @@ mod tests {
     fn drill_feeds_tower_through_conveyors() {
         let map = Map::generate(7, 256);
         let vein = vein_with_room(&map, 3);
-        let mut buildings = Buildings::new(256);
+        let mut buildings = Buildings::new(256, Bonuses::default());
         buildings.place(&map, BuildingKind::Drill, vein, Dir::East);
         buildings.place(&map, BuildingKind::Conveyor, east(vein, 1), Dir::East);
         buildings.place(&map, BuildingKind::Conveyor, east(vein, 2), Dir::East);
@@ -631,7 +647,7 @@ mod tests {
         let map = Map::generate(7, 256);
         let vein = vein_with_room(&map, 2);
         let color = map.vein_color(vein.x as u32, vein.y as u32);
-        let mut buildings = Buildings::new(256);
+        let mut buildings = Buildings::new(256, Bonuses::default());
         buildings.place(&map, BuildingKind::Drill, vein, Dir::East);
         buildings.place(&map, BuildingKind::Cutter, east(vein, 1), Dir::East);
         let tower = buildings.place(&map, BuildingKind::Tower, east(vein, 2), Dir::East);
@@ -647,12 +663,12 @@ mod tests {
     fn furnace_fuses_two_gems_of_the_same_grade() {
         let map = Map::generate(7, 256);
         let site = vein_with_room(&map, 1);
-        let mut buildings = Buildings::new(256);
+        let mut buildings = Buildings::new(256, Bonuses::default());
         let furnace = buildings.place(&map, BuildingKind::Furnace, site, Dir::East);
         let red = Gem::new(GemColor::Red, 2);
         let cyan = Gem::new(GemColor::Cyan, 2);
         let state = &mut buildings.get_mut(furnace).unwrap();
-        assert!(state.accepts(site, Item::Gem(red)));
+        assert!(state.accepts(site, Item::Gem(red), &Bonuses::default()));
         state.receive(
             Item::Gem(red),
             &mut Storage {
@@ -662,8 +678,12 @@ mod tests {
             },
         );
         // Un grade différent est refusé, le même grade est accepté.
-        assert!(!state.accepts(site, Item::Gem(Gem::new(GemColor::Cyan, 1))));
-        assert!(state.accepts(site, Item::Gem(cyan)));
+        assert!(!state.accepts(
+            site,
+            Item::Gem(Gem::new(GemColor::Cyan, 1)),
+            &Bonuses::default()
+        ));
+        assert!(state.accepts(site, Item::Gem(cyan), &Bonuses::default()));
         state.receive(
             Item::Gem(cyan),
             &mut Storage {
@@ -686,7 +706,7 @@ mod tests {
     fn drills_only_on_crystal_veins() {
         let map = Map::generate(7, 256);
         let vein = vein_with_room(&map, 1);
-        let buildings = Buildings::new(256);
+        let buildings = Buildings::new(256, Bonuses::default());
         let plain = map
             .tiles()
             .find(|&(_, _, t)| t == Terrain::Plain)
@@ -710,7 +730,7 @@ mod tests {
     fn removing_frees_the_tiles() {
         let map = Map::generate(7, 256);
         let vein = vein_with_room(&map, 1);
-        let mut buildings = Buildings::new(256);
+        let mut buildings = Buildings::new(256, Bonuses::default());
         let id = buildings.place(&map, BuildingKind::Tower, vein, Dir::East);
         assert_eq!(
             buildings.check_site(&map, BuildingKind::Tower, vein),

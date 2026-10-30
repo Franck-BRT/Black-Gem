@@ -1,5 +1,5 @@
-//! Black Gem — prototype M4 : expéditions (15 min à plus d'une heure), forage du Cœur,
-//! usine, gemmes, tours, et golems programmés en Python.
+//! Black Gem — prototype M5 : l'Arche (progression entre expéditions), expéditions de 15 min
+//! à plus d'une heure, forage du Cœur, usine, gemmes, tours, golems programmés en Python.
 
 mod build;
 mod camera;
@@ -10,6 +10,7 @@ mod hud;
 mod i18n;
 mod mission;
 mod palette;
+mod profile;
 mod sim;
 mod sky;
 mod view;
@@ -42,6 +43,7 @@ fn main() {
             hud::HudPlugin,
             editor::EditorPlugin,
             mission::MissionPlugin,
+            profile::ProfilePlugin,
         ))
         .run();
 }

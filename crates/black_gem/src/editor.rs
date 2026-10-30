@@ -12,12 +12,13 @@ use bevy::{
     picking::{events::PointerClick, hover::Hovered},
     prelude::*,
 };
-use gem_sim::{BuildError, Command, GOLEM_COST, GolemStatus, MAX_GOLEMS, golem::TEMPLATES};
+use gem_sim::{BuildError, Command, GolemStatus, MAX_GOLEMS, golem::TEMPLATES};
 
 use crate::{
     build::{BlocksWorldInput, BuildState},
     code_buffer::CodeBuffer,
     i18n::{Language, Tr},
+    profile::Profile,
     sim::Sim,
 };
 
@@ -39,6 +40,8 @@ pub struct Editor {
     buffer: CodeBuffer,
     /// Le clavier écrit dans le code (les raccourcis du jeu sont alors désactivés).
     pub focused: bool,
+    /// Message ponctuel (programme enregistré…), affiché en tête de la console.
+    notice: Option<String>,
     scroll: usize,
 }
 
@@ -76,9 +79,16 @@ enum EditorButton {
     Run,
     Stop,
     Slow,
+    Save,
     Close,
     Template(usize),
+    /// Programme de la bibliothèque (usize::MAX : l'étiquette de la rangée).
+    Library(usize),
 }
+
+/// Rangée des programmes enregistrés dans la bibliothèque.
+#[derive(Component)]
+struct LibraryRow;
 
 pub struct EditorPlugin;
 
@@ -96,6 +106,7 @@ impl Plugin for EditorPlugin {
                     update_code_text,
                     update_console,
                     update_golem_list,
+                    update_library_row,
                     update_button_labels,
                 )
                     .chain(),
@@ -171,6 +182,7 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         EditorButton::Run,
                         EditorButton::Stop,
                         EditorButton::Slow,
+                        EditorButton::Save,
                         EditorButton::Close,
                     ] {
                         spawn_button(row, button, &ui);
@@ -193,6 +205,17 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         spawn_button(row, EditorButton::Template(i), &ui);
                     }
                 });
+            // Bibliothèque : les programmes enregistrés (reconstruite quand elle change).
+            panel.spawn((
+                LibraryRow,
+                Node {
+                    column_gap: Val::Px(6.0),
+                    row_gap: Val::Px(4.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ));
             // Code.
             panel
                 .spawn((
@@ -254,6 +277,7 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, button: EditorButton, font: &
             move |_: On<PointerClick>,
                   mut editor: ResMut<Editor>,
                   mut sim: ResMut<Sim>,
+                  mut profile: ResMut<Profile>,
                   language: Res<Language>| {
                 let Some(id) = editor.golem else {
                     return;
@@ -284,6 +308,16 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, button: EditorButton, font: &
                         editor.scroll = 0;
                     }
                     EditorButton::Template(_) => {}
+                    EditorButton::Save => {
+                        let name = profile.save_script(&editor.buffer.text);
+                        editor.notice = Some(format!("{} {name}", language.tr(Tr::Saved)));
+                    }
+                    EditorButton::Library(i) => {
+                        if let Some(script) = profile.scripts.get(i) {
+                            editor.buffer = CodeBuffer::new(script.source.clone());
+                            editor.scroll = 0;
+                        }
+                    }
                 }
             },
         )
@@ -465,6 +499,7 @@ fn update_button_labels(
     sim: Res<Sim>,
     editor: Res<Editor>,
     language: Res<Language>,
+    profile: Res<Profile>,
     mut labels: Query<(&EditorButton, &mut Text)>,
 ) {
     let slow = editor
@@ -480,6 +515,11 @@ fn update_button_labels(
             EditorButton::Close => language.tr(Tr::Close),
             EditorButton::Template(i) if *i < TEMPLATES.len() => TEMPLATES[*i].0,
             EditorButton::Template(_) => language.tr(Tr::Templates),
+            EditorButton::Save => language.tr(Tr::SaveScript),
+            EditorButton::Library(i) => profile
+                .scripts
+                .get(*i)
+                .map_or(language.tr(Tr::Library), |s| s.name.as_str()),
         };
         if text.0 != label {
             text.0 = label.to_string();
@@ -605,6 +645,9 @@ fn update_console(
         return;
     };
     let mut lines = vec![language.tr(Tr::EditorHint).to_string()];
+    if let Some(notice) = &editor.notice {
+        lines.push(notice.clone());
+    }
     if editor.focused {
         let (line, col) = editor.buffer.line_col();
         lines[0] = format!("{} {}:{}", lines[0], line + 1, col + 1);
@@ -640,7 +683,7 @@ fn update_console(
 }
 
 /// Golems affichés (identifiant, état) et langue, pour ne reconstruire la liste qu'au besoin.
-type ShownGolems = (Vec<(u32, String)>, Language);
+type ShownGolems = (Vec<(u32, String)>, Language, u32);
 
 /// Liste des golems (cliquer pour ouvrir son programme) et bouton pour en fabriquer.
 fn update_golem_list(
@@ -656,7 +699,7 @@ fn update_golem_list(
         .iter()
         .map(|g| (g.id, status_label(&g.status, *language)))
         .collect();
-    let current = (rows.clone(), *language);
+    let current = (rows.clone(), *language, sim.config.bonuses.golem_cost);
     if shown.as_ref() == Some(&current) {
         return;
     }
@@ -705,7 +748,7 @@ fn update_golem_list(
                      mut sim: ResMut<Sim>,
                      mut state: ResMut<BuildState>,
                      time: Res<Time<Real>>| {
-                        if sim.stock >= GOLEM_COST {
+                        if sim.stock >= sim.config.bonuses.golem_cost {
                             sim.queue(Command::SpawnGolem);
                         } else {
                             state.error = Some((
@@ -717,10 +760,45 @@ fn update_golem_list(
                 )
                 .with_children(|row| {
                     row.spawn((
-                        Text::new(lang.tr(Tr::NewGolem)),
+                        Text::new(format!(
+                            "{} ({} {})",
+                            lang.tr(Tr::NewGolem),
+                            sim.config.bonuses.golem_cost,
+                            lang.tr(Tr::Crystals).to_lowercase()
+                        )),
                         text_style(&ui, 14.0, Color::WHITE),
                     ));
                 });
+        }
+    });
+}
+
+/// Reconstruit la rangée « Bibliothèque » quand la liste des programmes change.
+fn update_library_row(
+    mut commands: Commands,
+    profile: Res<Profile>,
+    fonts: Res<EditorFonts>,
+    row: Single<Entity, With<LibraryRow>>,
+    mut shown: Local<Option<Vec<String>>>,
+) {
+    let names: Vec<String> = profile.scripts.iter().map(|s| s.name.clone()).collect();
+    if shown.as_ref() == Some(&names) {
+        return;
+    }
+    *shown = Some(names.clone());
+    let font = fonts.ui.clone();
+    commands.entity(*row).despawn_children();
+    if names.is_empty() {
+        return;
+    }
+    commands.entity(*row).with_children(|row| {
+        row.spawn((
+            EditorButton::Library(usize::MAX),
+            Text::default(),
+            text_style(&font, 13.0, Color::srgb(0.7, 0.7, 0.8)),
+        ));
+        for i in 0..names.len() {
+            spawn_button(row, EditorButton::Library(i), &font);
         }
     });
 }

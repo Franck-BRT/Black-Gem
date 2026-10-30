@@ -5,8 +5,7 @@ use std::{collections::HashMap, f32::consts::FRAC_PI_2};
 
 use bevy::{light::NotShadowCaster, prelude::*};
 use gem_sim::{
-    BuildingKind, BuildingState, Dir, Gem, GemColor, Item, ShotSource,
-    building::{CONVEYOR_TICKS, DRILL_PERIOD, FUSE_TICKS},
+    BuildingKind, BuildingState, Dir, Gem, GemColor, Item, ShotSource, building::FUSE_TICKS,
 };
 
 use crate::{
@@ -620,7 +619,8 @@ fn animate_drills(
             if working {
                 transform.rotate_y(time.delta_secs() * 6.0);
             }
-            let pulse = (*timer as f32 / DRILL_PERIOD as f32 * std::f32::consts::TAU).sin();
+            let period = sim.config.bonuses.drill_period as f32;
+            let pulse = (*timer as f32 / period * std::f32::consts::TAU).sin();
             transform.translation.y = 0.45 + if working { 0.04 * pulse } else { 0.0 };
         }
     }
@@ -668,8 +668,9 @@ fn animate_conveyor_items(
             Some(BuildingState::Conveyor {
                 item: Some((carried, progress)),
             }) => {
-                let moving = (*progress < CONVEYOR_TICKS) as u32 as f32;
-                let t = ((*progress as f32 + alpha * moving) / CONVEYOR_TICKS as f32).min(1.0);
+                let ticks = sim.config.bonuses.conveyor_ticks;
+                let moving = (*progress < ticks) as u32 as f32;
+                let t = ((*progress as f32 + alpha * moving) / ticks as f32).min(1.0);
                 let (new_mesh, new_material, scale) = item_look(&kit, *carried);
                 if mesh.0 != new_mesh {
                     mesh.0 = new_mesh;

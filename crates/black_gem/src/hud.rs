@@ -6,8 +6,7 @@ use bevy::{
     prelude::*,
 };
 use gem_sim::{
-    BuildingKind, BuildingState, Gem, Outcome, TICKS_PER_SECOND,
-    building::{CRYSTALS_PER_GEM, SHOTS_PER_CRYSTAL},
+    BuildingKind, BuildingState, Gem, Outcome, TICKS_PER_SECOND, building::SHOTS_PER_CRYSTAL,
 };
 
 use crate::{
@@ -383,7 +382,7 @@ fn update_status(
         sim.stock,
         lang.tr(Tr::HqHealth),
         hq.hp.max(0),
-        hq.kind.max_hp(),
+        hq.max_hp,
         lang.tr(Tr::Night),
         sim.wave,
         sim.kills,
@@ -528,9 +527,10 @@ fn update_info(
                         .filter(|color| counts[color.index()] > 0)
                         .map(|color| {
                             format!(
-                                "{} {}/{CRYSTALS_PER_GEM}",
+                                "{} {}/{}",
                                 lang.tr(Tr::Color(color)),
-                                counts[color.index()]
+                                counts[color.index()],
+                                sim.config.bonuses.crystals_per_gem
                             )
                         })
                         .collect();
@@ -665,6 +665,7 @@ fn update_inventory(
 fn update_outcome(
     sim: Res<Sim>,
     language: Res<Language>,
+    reward: Res<crate::profile::LastReward>,
     mut panel: Single<&mut Visibility, With<OutcomePanel>>,
     mut title: Single<(&mut Text, &mut TextColor), With<OutcomeTitle>>,
     mut detail: Single<&mut Text, (With<OutcomeDetail>, Without<OutcomeTitle>)>,
@@ -680,5 +681,11 @@ fn update_outcome(
     };
     title.0.0 = language.tr(heading).to_string();
     title.1.0 = color;
-    detail.0 = language.tr(body).to_string();
+    detail.0 = match reward.0 {
+        Some(earned) if *language == Language::French => {
+            format!("+{earned} éclats noirs pour l'Arche\n{}", language.tr(body))
+        }
+        Some(earned) => format!("+{earned} black shards for the Ark\n{}", language.tr(body)),
+        None => language.tr(body).to_string(),
+    };
 }

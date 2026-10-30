@@ -6,7 +6,22 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M4 — les expéditions
+## État actuel : prototype M5 — l'Arche
+
+**L'Arche** est la station en orbite entre deux expéditions. Elle garde la progression
+(sauvegarde automatique : un fichier `BlackGem/profile.json` dans le dossier de données de
+l'utilisateur sur ordinateur, le stockage local du navigateur sur le web et l'iPhone) :
+
+- **Éclats noirs** : gagnés à la fin de chaque expédition (victoire : 15 / 40 / 90 selon le
+  format + 2 par nuit ; échec : 5 par palier franchi + 2 par nuit ; Colonie : 5 par nuit).
+- **Recherche** : 12 améliorations permanentes avec prérequis (réserves de départ, blindage du
+  QG, foreuses et convoyeurs rapides, tours renforcées, optique de visée, taille efficace,
+  golems véloces et économiques, trépan du Cœur, gemme de départ).
+- **Codex** : les 31 combinaisons de couleurs de gemmes, découvertes ou non, avec le meilleur
+  grade atteint.
+- **Bibliothèque** : bouton « Enregistrer » dans l'éditeur ; les programmes enregistrés se
+  rechargent en un clic dans toutes les expéditions suivantes.
+- **Statistiques** : expéditions, victoires, ennemis détruits, meilleurs temps par format.
 
 Au lancement, on **choisit son expédition** selon le temps dont on dispose, et la planète
 (numéro ou au hasard) :

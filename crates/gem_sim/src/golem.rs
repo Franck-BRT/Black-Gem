@@ -21,7 +21,7 @@ use crate::{
 pub const GOLEM_COST: u32 = 15;
 pub const MAX_GOLEMS: usize = 8;
 /// Vitesse de vol, en unités fines par tick (3 cases/s).
-const GOLEM_SPEED: i32 = 100;
+pub const GOLEM_SPEED: i32 = 100;
 /// Instructions exécutées par tick en mode normal.
 const FUEL_PER_TICK: u32 = 40;
 /// En mode lent, une instruction tous les `SLOW_PERIOD` ticks : on voit le programme avancer.
@@ -224,6 +224,8 @@ pub struct World<'a> {
     pub core: Option<Tile>,
     /// Avancement du forage, en pour cent.
     pub drilling_percent: u32,
+    /// Vitesse de vol, en unités fines par tick.
+    pub golem_speed: i32,
 }
 
 impl Golem {
@@ -238,7 +240,7 @@ impl Golem {
             Action::Move(target) => {
                 let target = *target;
                 self.pos
-                    .move_towards(target, GOLEM_SPEED)
+                    .move_towards(target, world.golem_speed)
                     .then_some(Value::None)
             }
             Action::Wait(until) => (world.tick >= *until).then_some(Value::None),

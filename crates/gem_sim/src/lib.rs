@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 
 pub use building::{BuildError, Building, BuildingKind, BuildingState};
 pub use enemy::Enemy;
-pub use expedition::{EXTRACTION_TICKS, ExpeditionConfig, Format};
+pub use expedition::{Bonuses, EXTRACTION_TICKS, ExpeditionConfig, Format};
 pub use gem::{Gem, GemColor, Item, TowerProfile};
 pub use geom::{Dir, Pos, Tile, UNITS_PER_TILE};
 pub use golem::{GOLEM_COST, Golem, GolemStatus, MAX_GOLEMS};
@@ -171,7 +171,7 @@ impl Simulation {
     pub fn with_config(seed: u64, config: ExpeditionConfig) -> Self {
         let map_size = config.map_size;
         let map = Map::generate(seed, map_size);
-        let mut buildings = Buildings::new(map_size);
+        let mut buildings = Buildings::new(map_size, config.bonuses);
         let corner = (map_size as i32 - HQ_SIZE) / 2;
         let hq_tile = Tile::new(corner, corner);
         buildings.place(&map, BuildingKind::Hq, hq_tile, Dir::South);
@@ -191,8 +191,13 @@ impl Simulation {
             tick: (config.ticks_per_day / 4) as u64,
             buildings,
             enemies: Vec::new(),
-            stock: STARTING_CRYSTALS,
-            gems: Vec::new(),
+            stock: config.bonuses.starting_crystals,
+            // Recherche « gemme de départ » : une gemme de grade 2, de couleur tirée de la graine.
+            gems: if config.bonuses.starting_gem {
+                vec![Gem::new(GemColor::ALL[(seed % 5) as usize], 2)]
+            } else {
+                Vec::new()
+            },
             golems: Vec::new(),
             nests,
             config,
@@ -342,8 +347,9 @@ impl Simulation {
                 }
             }
             Command::SpawnGolem => {
-                if self.stock >= GOLEM_COST && self.golems.len() < MAX_GOLEMS {
-                    self.stock -= GOLEM_COST;
+                let cost = self.config.bonuses.golem_cost;
+                if self.stock >= cost && self.golems.len() < MAX_GOLEMS {
+                    self.stock -= cost;
                     let id = self.golems.iter().map(|g| g.id).max().unwrap_or(0) + 1;
                     let mut pos = self.hq().center();
                     // Les golems sortent du QG côté sud, l'un à côté de l'autre.
@@ -391,6 +397,7 @@ impl Simulation {
             },
             core,
             drilling_percent,
+            golem_speed: self.config.bonuses.golem_speed,
             enemies: &self.enemies,
             map_size: self.map.size,
             tick: self.tick,
@@ -485,9 +492,14 @@ impl Simulation {
     fn fire_weapons(&mut self) {
         for id in self.buildings.ids() {
             let building = self.buildings.get_mut(id).unwrap();
-            let Some((profile, reload)) = building.weapon() else {
+            let Some((mut profile, reload)) = building.weapon() else {
                 continue;
             };
+            if building.kind == BuildingKind::Tower {
+                let bonuses = &self.config.bonuses;
+                profile.damage = profile.damage * bonuses.tower_damage / 100;
+                profile.range += bonuses.tower_range;
+            }
             let center = building.center();
             let source = if building.kind == BuildingKind::Hq {
                 ShotSource::Hq
@@ -913,6 +925,28 @@ mod tests {
         run(&mut sim, day * 4);
         assert_eq!(sim.outcome, None);
         assert_eq!(sim.wave, 4);
+    }
+
+    #[test]
+    fn research_bonuses_change_the_rules() {
+        let config = ExpeditionConfig {
+            bonuses: Bonuses {
+                starting_crystals: 120,
+                hq_hp: 300,
+                golem_cost: 5,
+                starting_gem: true,
+                ..Bonuses::default()
+            },
+            ..Format::Scout.config()
+        };
+        let mut sim = Simulation::with_config(9, config);
+        assert_eq!(sim.stock, 120);
+        assert_eq!(sim.hq().max_hp, BuildingKind::Hq.max_hp() + 300);
+        assert_eq!(sim.gems.len(), 1);
+        assert_eq!(sim.gems[0].grade, 2);
+        sim.queue(Command::SpawnGolem);
+        sim.step();
+        assert_eq!(sim.stock, 115);
     }
 
     #[test]

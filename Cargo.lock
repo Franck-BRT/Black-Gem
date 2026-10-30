@@ -2029,6 +2029,9 @@ dependencies = [
  "bevy",
  "gem_script",
  "gem_sim",
+ "serde",
+ "serde_json",
+ "web-sys",
 ]
 
 [[package]]
