@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::{
-    ast::{BinOp, Expr, Stmt, StmtKind, Target},
+    ast::{BinOp, Expr, PanicKind, Stmt, StmtKind, Target},
     error::{ErrorKind, ScriptError, edit_distance},
     value::Value,
 };
@@ -17,6 +17,22 @@ pub enum Builtin {
     Min,
     Max,
     Str,
+    // Réservées au sous-ensemble Rust (aucun nom côté Python).
+    /// `(valeur, description du type, debug)` → texte, à la manière de `{}` / `{:?}`.
+    Format,
+    /// `liste` → `(liste sans le dernier, dernier ou None)`.
+    Pop,
+    /// `(liste, i)` → `(liste sans l'élément i, élément i)`.
+    Remove,
+    /// `(liste, i, x)` → liste avec x inséré en i.
+    Insert,
+    /// `(liste ou texte, x)` → booléen.
+    Contains,
+    Sort,
+    Reverse,
+    /// `liste` → liste de tuples `(indice, élément)`.
+    Enumerate,
+    Sum,
 }
 
 impl Builtin {
@@ -30,7 +46,18 @@ impl Builtin {
     ];
 
     pub fn name(self) -> &'static str {
-        Self::ALL.iter().find(|(_, b)| *b == self).unwrap().0
+        match self {
+            Builtin::Format => "format!",
+            Builtin::Pop => "pop",
+            Builtin::Remove => "remove",
+            Builtin::Insert => "insert",
+            Builtin::Contains => "contains",
+            Builtin::Sort => "sort",
+            Builtin::Reverse => "rev",
+            Builtin::Enumerate => "enumerate",
+            Builtin::Sum => "sum",
+            other => Self::ALL.iter().find(|(_, b)| *b == other).unwrap().0,
+        }
     }
 
     fn lookup(name: &str) -> Option<Builtin> {
@@ -101,6 +128,7 @@ pub enum Op {
     CallBuiltin(Builtin, u32),
     CallHost(u32, u32),
     Return,
+    Panic(PanicKind),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +148,9 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub constants: Vec<Value>,
     pub globals: Vec<String>,
+    /// Pour Rust : description du type de chaque variable globale (affichage à la Rust
+    /// dans l'inspecteur). Vide pour Python.
+    pub global_types: Vec<Option<Value>>,
 }
 
 pub fn compile(statements: &[Stmt], api: &Api) -> Result<Program, ScriptError> {
@@ -134,6 +165,7 @@ pub fn compile(statements: &[Stmt], api: &Api) -> Result<Program, ScriptError> {
             functions: Vec::new(),
             constants: Vec::new(),
             globals: globals.clone(),
+            global_types: Vec::new(),
         },
         global_index: globals
             .iter()
@@ -493,6 +525,17 @@ impl Compiler<'_> {
                 let start = context.start;
                 b.emit(Op::Jump(start));
             }
+            StmtKind::Panic(kind, message) => {
+                if let Some(message) = message {
+                    self.expr(b, message)?;
+                }
+                b.emit(Op::Panic(*kind));
+            }
+            StmtKind::Exit => {
+                let none = self.constant(Value::None);
+                b.emit(Op::Const(none));
+                b.emit(Op::Return);
+            }
             StmtKind::Global(_) | StmtKind::Pass => {}
         }
         Ok(())
@@ -621,6 +664,22 @@ impl Compiler<'_> {
                 };
             }
             Expr::Call(callee, args) => self.call(b, callee, args)?,
+            Expr::Const(value) => {
+                let c = self.constant(value.clone());
+                b.emit(Op::Const(c));
+            }
+            Expr::HostCall(id, args) => {
+                for arg in args {
+                    self.expr(b, arg)?;
+                }
+                b.emit(Op::CallHost(*id, args.len() as u32));
+            }
+            Expr::BuiltinCall(builtin, args) => {
+                for arg in args {
+                    self.expr(b, arg)?;
+                }
+                b.emit(Op::CallBuiltin(*builtin, args.len() as u32));
+            }
         }
         Ok(())
     }

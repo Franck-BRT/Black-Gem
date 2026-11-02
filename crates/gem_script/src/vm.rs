@@ -1,10 +1,13 @@
 //! Machine virtuelle : exécute le bytecode instruction par instruction, avec un budget
 //! (« carburant ») par appel, pour que le jeu garde la main et reste déterministe.
 
+use std::cmp::Ordering;
+
 use crate::{
-    ast::BinOp,
+    ast::{BinOp, PanicKind},
     compiler::{Builtin, Op, Program},
     error::{ErrorKind, ScriptError},
+    format::format_value,
     value::{Value, range_len},
 };
 
@@ -122,6 +125,30 @@ impl Vm {
             .zip(&self.globals)
             .filter_map(|(name, value)| Some((name.as_str(), value.as_ref()?)))
             .filter(|(_, value)| !matches!(value, Value::Function(_)))
+    }
+
+    /// Variables à montrer dans l'inspecteur : nom et valeur affichée (à la manière de Rust
+    /// pour un programme Rust). Les variables internes (`__…`) sont cachées et les variables
+    /// masquées (`x#2`) gardent leur nom d'origine.
+    pub fn inspect(&self, program: &Program) -> Vec<(String, String)> {
+        program
+            .globals
+            .iter()
+            .zip(&self.globals)
+            .enumerate()
+            .filter_map(|(i, (name, value))| {
+                let value = value.as_ref()?;
+                if matches!(value, Value::Function(_)) || name.starts_with("__") {
+                    return None;
+                }
+                let shown = name.split('#').next().unwrap_or(name).to_string();
+                let text = match program.global_types.get(i) {
+                    Some(Some(description)) => format_value(value, description, true),
+                    _ => value.to_string(),
+                };
+                Some((shown, text))
+            })
+            .collect()
     }
 
     /// Reprend après une action du jeu, avec son résultat.
@@ -376,6 +403,13 @@ impl Vm {
                     HostReply::Suspend => self.state = State::Waiting,
                 }
             }
+            Op::Panic(kind) => {
+                return Err(match kind {
+                    PanicKind::Message => ErrorKind::Panic(self.pop().to_string()),
+                    PanicKind::UnwrapNone => ErrorKind::UnwrapNone,
+                    PanicKind::UnwrapErr => ErrorKind::UnwrapErr,
+                });
+            }
             Op::Return => {
                 let result = self.pop();
                 let frame = self.frames.pop().unwrap();
@@ -416,6 +450,21 @@ fn floor_mod(a: i64, b: i64) -> Exec<i64> {
     })
 }
 
+/// Division de Rust : tronquée vers zéro.
+fn trunc_div(a: i64, b: i64) -> Exec<i64> {
+    if b == 0 {
+        return Err(ErrorKind::DivisionByZero);
+    }
+    a.checked_div(b).ok_or(ErrorKind::Overflow)
+}
+
+fn trunc_rem(a: i64, b: i64) -> Exec<i64> {
+    if b == 0 {
+        return Err(ErrorKind::DivisionByZero);
+    }
+    a.checked_rem(b).ok_or(ErrorKind::Overflow)
+}
+
 fn repeat<T: Clone>(items: &[T], times: i64) -> Exec<Vec<T>> {
     let times = times.max(0) as usize;
     if items.len().saturating_mul(times) > MAX_LEN {
@@ -439,6 +488,8 @@ fn binary(op: BinOp, left: Value, right: Value) -> Exec<Value> {
             BinOp::Mul => Int(a.checked_mul(b).ok_or(overflow)?),
             BinOp::FloorDiv => Int(floor_div(a, b)?),
             BinOp::Mod => Int(floor_mod(a, b)?),
+            BinOp::Div => Int(trunc_div(a, b)?),
+            BinOp::Rem => Int(trunc_rem(a, b)?),
             BinOp::Pow => {
                 if b < 0 {
                     return Err(ErrorKind::NegativePower);
@@ -608,5 +659,132 @@ fn call_builtin(builtin: Builtin, args: Vec<Value>) -> Exec<Value> {
             };
             Ok(Value::Str(value.to_string()))
         }
+        Builtin::Format => {
+            let [value, description, debug] = args.as_slice() else {
+                return Err(wrong_count("3"));
+            };
+            Ok(Value::Str(format_value(value, description, debug.truthy())))
+        }
+        Builtin::Pop => {
+            let [Value::List(items)] = args.as_slice() else {
+                return Err(not_a_list(builtin, &args));
+            };
+            let mut items = items.clone();
+            let last = items.pop().unwrap_or(Value::None);
+            Ok(Value::Tuple(vec![Value::List(items), last]))
+        }
+        Builtin::Remove => {
+            let [Value::List(items), index] = args.as_slice() else {
+                return Err(not_a_list(builtin, &args));
+            };
+            let mut items = items.clone();
+            let i = list_index(index, items.len())?;
+            let item = items.remove(i);
+            Ok(Value::Tuple(vec![Value::List(items), item]))
+        }
+        Builtin::Insert => {
+            let [Value::List(items), index, value] = args.as_slice() else {
+                return Err(not_a_list(builtin, &args));
+            };
+            let i = int_arg(builtin, index)?;
+            if i < 0 || i as usize > items.len() {
+                return Err(ErrorKind::IndexOutOfRange {
+                    index: i,
+                    len: items.len(),
+                });
+            }
+            if items.len() >= MAX_LEN {
+                return Err(ErrorKind::TooBig);
+            }
+            let mut items = items.clone();
+            items.insert(i as usize, value.clone());
+            Ok(Value::List(items))
+        }
+        Builtin::Contains => match args.as_slice() {
+            [Value::List(items) | Value::Tuple(items), value] => {
+                Ok(Value::Bool(items.contains(value)))
+            }
+            [Value::Str(text), Value::Str(part)] => Ok(Value::Bool(text.contains(part.as_str()))),
+            [Value::Range(start, stop, _), value] => {
+                let n = int_arg(builtin, value)?;
+                Ok(Value::Bool(*start <= n && n < *stop))
+            }
+            _ => Err(not_a_list(builtin, &args)),
+        },
+        Builtin::Sort => {
+            let [Value::List(items)] = args.as_slice() else {
+                return Err(not_a_list(builtin, &args));
+            };
+            let mut items = items.clone();
+            let mut failure = None;
+            items.sort_by(|a, b| {
+                compare(a, b).unwrap_or_else(|| {
+                    failure = Some(ErrorKind::TypeMismatch {
+                        op: "<",
+                        left: a.type_name(),
+                        right: b.type_name(),
+                    });
+                    Ordering::Equal
+                })
+            });
+            match failure {
+                Some(error) => Err(error),
+                None => Ok(Value::List(items)),
+            }
+        }
+        Builtin::Reverse => match args.as_slice() {
+            [Value::List(items)] => Ok(Value::List(items.iter().rev().cloned().collect())),
+            [Value::Str(text)] => Ok(Value::Str(text.chars().rev().collect())),
+            _ => Err(not_a_list(builtin, &args)),
+        },
+        Builtin::Enumerate => {
+            let [Value::List(items) | Value::Tuple(items)] = args.as_slice() else {
+                return Err(not_a_list(builtin, &args));
+            };
+            Ok(Value::List(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| Value::Tuple(vec![Value::Int(i as i64), v.clone()]))
+                    .collect(),
+            ))
+        }
+        Builtin::Sum => {
+            let [Value::List(items) | Value::Tuple(items)] = args.as_slice() else {
+                return Err(not_a_list(builtin, &args));
+            };
+            let mut total: i64 = 0;
+            for item in items {
+                total = total
+                    .checked_add(int_arg(builtin, item)?)
+                    .ok_or(ErrorKind::Overflow)?;
+            }
+            Ok(Value::Int(total))
+        }
+    }
+}
+
+fn not_a_list(builtin: Builtin, args: &[Value]) -> ErrorKind {
+    ErrorKind::WrongArgType {
+        name: builtin.name().into(),
+        expected: "list",
+        got: args.first().map_or("None", Value::type_name),
+    }
+}
+
+/// Ordre entre deux valeurs (nombres, textes, booléens, tuples et listes, élément par élément).
+fn compare(a: &Value, b: &Value) -> Option<Ordering> {
+    match (a, b) {
+        (Value::Str(a), Value::Str(b)) => Some(a.cmp(b)),
+        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
+            for (x, y) in a.iter().zip(b) {
+                match compare(x, y)? {
+                    Ordering::Equal => {}
+                    other => return Some(other),
+                }
+            }
+            Some(a.len().cmp(&b.len()))
+        }
+        _ => Some(a.as_int()?.cmp(&b.as_int()?)),
     }
 }

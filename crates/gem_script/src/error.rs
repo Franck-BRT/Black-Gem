@@ -79,6 +79,17 @@ pub enum ErrorKind {
         french: String,
         english: String,
     },
+    /// Erreur du compilateur Rust, avec le code de l'erreur équivalente de `rustc`
+    /// (E0382…), pour pouvoir la retrouver dans la documentation officielle.
+    Rust {
+        code: &'static str,
+        french: String,
+        english: String,
+    },
+    /// `panic!(message)`.
+    Panic(String),
+    UnwrapNone,
+    UnwrapErr,
 }
 
 impl ScriptError {
@@ -279,6 +290,33 @@ impl ErrorKind {
                 } else {
                     english.clone()
                 }
+            }
+            Rust {
+                code,
+                french,
+                english,
+            } => {
+                let text = if fr { french } else { english };
+                if code.is_empty() {
+                    text.clone()
+                } else {
+                    format!("{text} [{code}]")
+                }
+            }
+            Panic(message) if fr => format!("le programme a paniqué : {message}"),
+            Panic(message) => format!("the program panicked: {message}"),
+            UnwrapNone if fr => {
+                "unwrap() appelé sur None : il n'y avait pas de valeur (utilise if let ou match)"
+                    .into()
+            }
+            UnwrapNone => {
+                "unwrap() called on None: there was no value (use if let or match)".into()
+            }
+            UnwrapErr if fr => {
+                "unwrap() appelé sur Err(…) : l'opération a échoué (utilise if let ou match)".into()
+            }
+            UnwrapErr => {
+                "unwrap() called on Err(…): the operation failed (use if let or match)".into()
             }
         }
     }

@@ -5,8 +5,9 @@
 //! prendre, déposer) suspendent le programme jusqu'à ce qu'elles soient terminées.
 
 use gem_script::{
-    Api, ErrorKind, Host, HostFunction, HostReply, Program, ScriptError, Step, Value, Vm,
-    compile_python,
+    Api, ErrorKind, Host, HostFunction, HostReply, HostType, Program, RustApi, RustEnum,
+    RustFunction, RustOpaque, ScriptError, Step, Value, Vm, compile_python, compile_rust,
+    looks_like_rust,
 };
 
 use crate::{
@@ -24,6 +25,8 @@ pub const MAX_GOLEMS: usize = 8;
 pub const GOLEM_SPEED: i32 = 100;
 /// Instructions exécutées par tick en mode normal.
 const FUEL_PER_TICK: u32 = 40;
+/// Un programme Rust est « compilé » : il exécute deux fois plus d'instructions par tick.
+const RUST_FUEL_PER_TICK: u32 = 80;
 /// En mode lent, une instruction tous les `SLOW_PERIOD` ticks : on voit le programme avancer.
 const SLOW_PERIOD: u64 = 8;
 /// Lignes gardées dans le journal d'un golem.
@@ -56,10 +59,15 @@ enum GameFn {
     Say,
     Core,
     Drilling,
+    // Versions Rust : les objets portés sont des valeurs (ownership).
+    TakeItem,
+    TakeGemItem,
+    DropItem,
 }
 
-/// Nom français, nom anglais, nombre d'arguments (min, max).
-const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 20] = [
+/// Nom français, nom anglais, nombre d'arguments (min, max). Les fonctions réservées à Rust
+/// ont des noms qu'un programme Python ne peut pas écrire.
+const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 23] = [
     (GameFn::MoveTo, &["aller_vers", "move_to"], 1, 2),
     (GameFn::Step, &["avancer", "step"], 1, 1),
     (GameFn::Position, &["position"], 0, 0),
@@ -85,6 +93,9 @@ const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 20] = [
     (GameFn::Say, &["dire", "say", "print"], 0, usize::MAX),
     (GameFn::Core, &["coeur", "cœur", "core"], 0, 0),
     (GameFn::Drilling, &["forage", "drilling"], 0, 0),
+    (GameFn::TakeItem, &["rust:prendre"], 0, 0),
+    (GameFn::TakeGemItem, &["rust:prendre_gemme"], 0, 0),
+    (GameFn::DropItem, &["rust:deposer"], 1, 1),
 ];
 
 /// L'API des golems, pour le compilateur (et pour l'aide de l'éditeur).
@@ -106,6 +117,116 @@ pub fn golem_api() -> Api {
             (vec!["CRISTAL", "CRYSTAL"], Value::Int(CARRY_CRYSTAL)),
             (vec!["GEMME", "GEM"], Value::Int(CARRY_GEM)),
         ],
+    }
+}
+
+/// L'API des golems pour les programmes Rust : mêmes fonctions, avec des types. Les objets
+/// portés sont des valeurs de type `Objet` : `prendre()` en donne un, `deposer(objet)` le
+/// consomme (il est déplacé), et le compilateur interdit de s'en servir ensuite.
+pub fn golem_rust_api() -> RustApi {
+    use HostType::*;
+    let pos = || Tuple(vec![Int, Int]);
+    let f = |names: &[&'static str],
+             game_fn: GameFn,
+             params: std::vec::Vec<HostType>,
+             ret: HostType| {
+        RustFunction {
+            names: names.to_vec(),
+            host: game_fn as u32,
+            params,
+            ret,
+        }
+    };
+    let item = || Named("Objet");
+    RustApi {
+        functions: vec![
+            f(
+                &["aller_vers", "move_to"],
+                GameFn::MoveTo,
+                vec![pos()],
+                Unit,
+            ),
+            f(
+                &["avancer", "step"],
+                GameFn::Step,
+                vec![Named("Direction")],
+                Unit,
+            ),
+            f(&["position"], GameFn::Position, vec![], pos()),
+            f(&["qg", "hq"], GameFn::Hq, vec![], pos()),
+            f(
+                &["tours", "towers"],
+                GameFn::Towers,
+                vec![],
+                Vec(Box::new(pos())),
+            ),
+            f(
+                &["foreuses", "drills"],
+                GameFn::Drills,
+                vec![],
+                Vec(Box::new(pos())),
+            ),
+            f(&["munitions", "ammo"], GameFn::Ammo, vec![pos()], Int),
+            f(&["a_gemme", "has_gem"], GameFn::HasGem, vec![pos()], Bool),
+            f(&["ennemis", "enemies"], GameFn::Enemies, vec![], Int),
+            f(
+                &["ennemi_proche", "nearest_enemy"],
+                GameFn::NearestEnemy,
+                vec![],
+                Option(Box::new(pos())),
+            ),
+            f(&["stock"], GameFn::Stock, vec![], Int),
+            f(&["gemmes", "gems"], GameFn::Gems, vec![], Int),
+            f(
+                &["prendre", "take"],
+                GameFn::TakeItem,
+                vec![],
+                Option(Box::new(item())),
+            ),
+            f(
+                &["prendre_gemme", "take_gem"],
+                GameFn::TakeGemItem,
+                vec![],
+                Option(Box::new(item())),
+            ),
+            f(
+                &["deposer", "déposer", "sertir", "drop", "set_gem"],
+                GameFn::DropItem,
+                vec![item()],
+                Result(Box::new(Unit), Box::new(item())),
+            ),
+            f(&["attendre", "wait"], GameFn::Wait, vec![Int], Unit),
+            f(
+                &["coeur", "cœur", "core"],
+                GameFn::Core,
+                vec![],
+                Option(Box::new(pos())),
+            ),
+            f(&["forage", "drilling"], GameFn::Drilling, vec![], Int),
+        ],
+        enums: vec![RustEnum {
+            names: vec!["Direction"],
+            variants: vec![
+                (vec!["Nord", "North"], Value::Int(0)),
+                (vec!["Est", "East"], Value::Int(1)),
+                (vec!["Sud", "South"], Value::Int(2)),
+                (vec!["Ouest", "West"], Value::Int(3)),
+            ],
+        }],
+        opaques: vec![RustOpaque {
+            names: vec!["Objet", "Item"],
+            fields: vec![(vec!["est_gemme", "is_gem"], Bool), (vec!["grade"], Int)],
+        }],
+        aliases: vec![(vec!["Position"], pos())],
+        print: GameFn::Say as u32,
+    }
+}
+
+/// Un objet porté, vu par un programme Rust : `(est_gemme, grade)`.
+fn item_value(item: Item) -> Value {
+    match item {
+        Item::Gem(gem) => Value::Tuple(vec![Value::Bool(true), Value::Int(gem.grade as i64)]),
+        _ => Value::Tuple(vec![Value::Bool(false), Value::Int(0)]),
     }
 }
 
@@ -144,6 +265,8 @@ pub struct Golem {
     pub line: Option<u32>,
     /// Derniers messages affichés par `dire()` / `print()`.
     pub log: Vec<String>,
+    /// Le programme est écrit en Rust.
+    pub rust: bool,
     program: Option<Program>,
     vm: Option<Vm>,
     action: Action,
@@ -161,6 +284,7 @@ impl Golem {
             slow: false,
             line: None,
             log: Vec::new(),
+            rust: false,
             program: None,
             vm: None,
             action: Action::None,
@@ -171,7 +295,13 @@ impl Golem {
     pub fn start(&mut self, source: String) {
         self.stop();
         self.log.clear();
-        match compile_python(&source, &golem_api()) {
+        self.rust = looks_like_rust(&source);
+        let compiled = if self.rust {
+            compile_rust(&source, &golem_rust_api())
+        } else {
+            compile_python(&source, &golem_api())
+        };
+        match compiled {
             Ok(program) => {
                 self.vm = Some(Vm::new(&program));
                 self.program = Some(program);
@@ -196,10 +326,7 @@ impl Golem {
     /// Variables globales du programme en cours (pour l'inspecteur de l'éditeur).
     pub fn variables(&self) -> Vec<(String, String)> {
         match (&self.vm, &self.program) {
-            (Some(vm), Some(program)) => vm
-                .globals(program)
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect(),
+            (Some(vm), Some(program)) => vm.inspect(program),
             _ => Vec::new(),
         }
     }
@@ -257,7 +384,11 @@ impl Golem {
         }
 
         let fuel = if !self.slow {
-            FUEL_PER_TICK
+            if self.rust {
+                RUST_FUEL_PER_TICK
+            } else {
+                FUEL_PER_TICK
+            }
         } else if world.tick.is_multiple_of(SLOW_PERIOD) {
             1
         } else {
@@ -476,6 +607,32 @@ impl Host for GolemHost<'_, '_, '_> {
                 }
                 Ok(self.after_a_tick(Value::Bool(taken.is_some())))
             }
+            GameFn::TakeItem | GameFn::TakeGemItem => {
+                // Un golem qui porte déjà un objet le « reprend » : utile si son programme
+                // a été relancé pendant qu'il portait quelque chose.
+                if let Some(item) = self.golem.carrying {
+                    return Ok(self.after_a_tick(item_value(item)));
+                }
+                let reply = if game_fn == GameFn::TakeItem {
+                    self.call(GameFn::Take as u32, Vec::new())?
+                } else {
+                    self.call(GameFn::TakeGem as u32, Vec::new())?
+                };
+                debug_assert!(matches!(reply, HostReply::Suspend));
+                let value = self.golem.carrying.map_or(Value::None, item_value);
+                Ok(self.after_a_tick(value))
+            }
+            GameFn::DropItem => {
+                let objet = args.into_iter().next().unwrap_or(Value::None);
+                self.call(GameFn::Drop as u32, Vec::new())?;
+                let dropped = self.golem.carrying.is_none();
+                let value = if dropped {
+                    Value::Tuple(vec![Value::Bool(true), Value::Tuple(Vec::new())])
+                } else {
+                    Value::Tuple(vec![Value::Bool(false), objet])
+                };
+                Ok(self.after_a_tick(value))
+            }
             GameFn::Drop => {
                 let dropped = match self.golem.carrying {
                     Some(item) => {
@@ -603,6 +760,201 @@ pub const TEMPLATES: [(&str, &str, &str); 4] = [
     ),
 ];
 
+/// Les mêmes programmes d'exemple, en Rust (Acte II) : les objets portés sont des valeurs
+/// qui se **déplacent**.
+pub const RUST_TEMPLATES: [(&str, &str, &str); 4] = [
+    (
+        "Ravitailleur",
+        r#"// Ravitailleur (Rust) : munitions pour les tours.
+// prendre() donne un Objet : le golem le possède.
+// deposer(cristal) le déplace dans la tour.
+fn main() {
+    loop {
+        for tour in tours() {
+            if munitions(tour) < 12 {
+                aller_vers(qg());
+                if let Some(cristal) = prendre() {
+                    aller_vers(tour);
+                    if deposer(cristal).is_ok() {
+                        println!("Munitions livrées en {:?}", tour);
+                    }
+                }
+            }
+        }
+        attendre(1);
+    }
+}
+"#,
+        r#"// Supplier (Rust): ammo for the towers.
+// take() gives an Item: the golem owns it.
+// drop(crystal) moves it into the tower.
+fn main() {
+    loop {
+        for tower in towers() {
+            if ammo(tower) < 12 {
+                move_to(hq());
+                if let Some(crystal) = take() {
+                    move_to(tower);
+                    if drop(crystal).is_ok() {
+                        println!("Ammo delivered at {:?}", tower);
+                    }
+                }
+            }
+        }
+        wait(1);
+    }
+}
+"#,
+    ),
+    (
+        "Sertisseur",
+        r#"// Sertisseur (Rust) : une gemme est une valeur unique.
+// Après sertir(gemme), le golem ne l'a plus : essaie
+// gemme.grade() juste après, le compilateur refuse.
+fn main() {
+    loop {
+        for tour in tours() {
+            if !a_gemme(tour) && gemmes() > 0 {
+                aller_vers(qg());
+                if let Some(gemme) = prendre_gemme() {
+                    // Lire n'est pas prendre :
+                    let grade = gemme.grade();
+                    aller_vers(tour);
+                    match sertir(gemme) {
+                        Ok(()) => println!("Gemme {grade} sertie"),
+                        Err(g) => println!("Refusée : {}", g.grade()),
+                    }
+                }
+            }
+        }
+        attendre(2);
+    }
+}
+"#,
+        r#"// Jeweller (Rust): a gem is a unique value.
+// After set_gem(gem), the golem no longer has it: try
+// gem.grade() right after, the compiler refuses.
+fn main() {
+    loop {
+        for tower in towers() {
+            if !has_gem(tower) && gems() > 0 {
+                move_to(hq());
+                if let Some(gem) = take_gem() {
+                    // Reading is not taking:
+                    let grade = gem.grade();
+                    move_to(tower);
+                    match set_gem(gem) {
+                        Ok(()) => println!("Grade {grade} gem set"),
+                        Err(g) => println!("Refused: {}", g.grade()),
+                    }
+                }
+            }
+        }
+        wait(2);
+    }
+}
+"#,
+    ),
+    (
+        "Mineur",
+        r#"// Mineur (Rust) : apporte les cristaux des foreuses au Grand foreur.
+// coeur() renvoie une Option : None sans Cœur.
+fn main() {
+    let Some(coeur) = coeur() else {
+        println!("Pas de Cœur sur cette planète");
+        return;
+    };
+    loop {
+        for foreuse in foreuses() {
+            aller_vers(foreuse);
+            if let Some(cristal) = prendre() {
+                aller_vers(coeur);
+                let _ = deposer(cristal);
+                println!("Forage : {} %", forage());
+            }
+        }
+        attendre(1);
+    }
+}
+"#,
+        r#"// Miner (Rust): brings crystals from the drills to the Great drill.
+// core() returns an Option: None while there is no Core.
+fn main() {
+    let Some(core) = core() else {
+        println!("No Core on this planet");
+        return;
+    };
+    loop {
+        for drill in drills() {
+            move_to(drill);
+            if let Some(crystal) = take() {
+                move_to(core);
+                let _ = drop(crystal);
+                println!("Drilling: {} %", drilling());
+            }
+        }
+        wait(1);
+    }
+}
+"#,
+    ),
+    (
+        "Patrouille",
+        r#"// Patrouille (Rust) : fait le tour du QG et signale les ennemis.
+// &parcours : la boucle l'emprunte sans le prendre.
+const RAYON: i64 = 6;
+
+fn coins(centre: Position) -> Vec<Position> {
+    let (x, y) = centre;
+    vec![
+        (x - RAYON, y - RAYON),
+        (x + RAYON, y - RAYON),
+        (x + RAYON, y + RAYON),
+        (x - RAYON, y + RAYON),
+    ]
+}
+
+fn main() {
+    let parcours = coins(qg());
+    loop {
+        for &coin in &parcours {
+            aller_vers(coin);
+            if let Some(ennemi) = ennemi_proche() {
+                println!("{} ennemis, proche : {:?}", ennemis(), ennemi);
+            }
+        }
+    }
+}
+"#,
+        r#"// Patrol (Rust): circles the HQ and reports enemies.
+// &route: the loop borrows it without taking it.
+const RADIUS: i64 = 6;
+
+fn corners(center: Position) -> Vec<Position> {
+    let (x, y) = center;
+    vec![
+        (x - RADIUS, y - RADIUS),
+        (x + RADIUS, y - RADIUS),
+        (x + RADIUS, y + RADIUS),
+        (x - RADIUS, y + RADIUS),
+    ]
+}
+
+fn main() {
+    let route = corners(hq());
+    loop {
+        for &corner in &route {
+            move_to(corner);
+            if let Some(enemy) = nearest_enemy() {
+                println!("{} enemies, nearest: {:?}", enemies(), enemy);
+            }
+        }
+    }
+}
+"#,
+    ),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +965,12 @@ mod tests {
         for (name, french, english) in TEMPLATES {
             compile_python(french, &api).unwrap_or_else(|e| panic!("{name} (fr) : {e}"));
             compile_python(english, &api).unwrap_or_else(|e| panic!("{name} (en) : {e}"));
+        }
+        let rust = golem_rust_api();
+        for (name, french, english) in RUST_TEMPLATES {
+            assert!(looks_like_rust(french) && looks_like_rust(english));
+            compile_rust(french, &rust).unwrap_or_else(|e| panic!("{name} (fr) : {e}"));
+            compile_rust(english, &rust).unwrap_or_else(|e| panic!("{name} (en) : {e}"));
         }
     }
 }

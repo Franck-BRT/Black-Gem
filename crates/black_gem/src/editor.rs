@@ -12,7 +12,11 @@ use bevy::{
     picking::{events::PointerClick, hover::Hovered},
     prelude::*,
 };
-use gem_sim::{BuildError, Command, GolemStatus, MAX_GOLEMS, golem::TEMPLATES};
+use gem_script::looks_like_rust;
+use gem_sim::{
+    BuildError, Command, GolemStatus, MAX_GOLEMS,
+    golem::{RUST_TEMPLATES, TEMPLATES},
+};
 
 use crate::{
     build::{BlocksWorldInput, BuildState},
@@ -23,7 +27,7 @@ use crate::{
 };
 
 /// Nombre de lignes de code visibles à la fois.
-const VISIBLE_LINES: usize = 13;
+const VISIBLE_LINES: usize = 11;
 
 const PANEL_COLOR: Color = Color::srgba(0.02, 0.01, 0.05, 0.85);
 const CODE_BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.02, 0.9);
@@ -43,6 +47,18 @@ pub struct Editor {
     /// Message ponctuel (programme enregistré…), affiché en tête de la console.
     notice: Option<String>,
     scroll: usize,
+    /// Les modèles proposés sont en Rust (sinon en Python).
+    rust_templates: bool,
+}
+
+impl Editor {
+    fn templates(&self) -> &'static [(&'static str, &'static str, &'static str); 4] {
+        if self.rust_templates {
+            &RUST_TEMPLATES
+        } else {
+            &TEMPLATES
+        }
+    }
 }
 
 /// Condition d'exécution : vraie quand le joueur tape du code.
@@ -82,6 +98,8 @@ enum EditorButton {
     Save,
     Close,
     Template(usize),
+    /// Bascule des modèles entre Python et Rust.
+    TemplateLanguage,
     /// Programme de la bibliothèque (usize::MAX : l'étiquette de la rangée).
     Library(usize),
 }
@@ -201,6 +219,7 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         Text::default(),
                         text_style(&ui, 13.0, Color::srgb(0.7, 0.7, 0.8)),
                     ));
+                    spawn_button(row, EditorButton::TemplateLanguage, &ui);
                     for i in 0..TEMPLATES.len() {
                         spawn_button(row, EditorButton::Template(i), &ui);
                     }
@@ -297,8 +316,11 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, button: EditorButton, font: &
                         editor.golem = None;
                         editor.focused = false;
                     }
+                    EditorButton::TemplateLanguage => {
+                        editor.rust_templates = !editor.rust_templates;
+                    }
                     EditorButton::Template(i) if i < TEMPLATES.len() => {
-                        let (_, french, english) = TEMPLATES[i];
+                        let (_, french, english) = editor.templates()[i];
                         let text = if *language == Language::French {
                             french
                         } else {
@@ -336,7 +358,7 @@ fn open(editor: &mut Editor, sim: &Sim, id: u32, language: Language) {
         return;
     };
     let source = if golem.source.is_empty() {
-        let (_, french, english) = TEMPLATES[0];
+        let (_, french, english) = editor.templates()[0];
         if language == Language::French {
             french
         } else {
@@ -482,12 +504,20 @@ fn update_editor_panel(
         return;
     };
     **panel = Visibility::Inherited;
-    title.0 = format!(
-        "{} {} — {}",
+    let code_language = if looks_like_rust(&editor.buffer.text) {
+        "Rust"
+    } else {
+        "Python"
+    };
+    let text = format!(
+        "{} {} · {code_language} — {}",
         language.tr(Tr::Golem),
         golem.id,
         status_label(&golem.status, *language)
     );
+    if title.0 != text {
+        title.0 = text;
+    }
     area.0 = if editor.focused {
         CODE_FOCUSED
     } else {
@@ -513,7 +543,9 @@ fn update_button_labels(
             EditorButton::Slow if slow => language.tr(Tr::Slow),
             EditorButton::Slow => language.tr(Tr::Fast),
             EditorButton::Close => language.tr(Tr::Close),
-            EditorButton::Template(i) if *i < TEMPLATES.len() => TEMPLATES[*i].0,
+            EditorButton::Template(i) if *i < TEMPLATES.len() => editor.templates()[*i].0,
+            EditorButton::TemplateLanguage if editor.rust_templates => "Rust",
+            EditorButton::TemplateLanguage => "Python",
             EditorButton::Template(_) => language.tr(Tr::Templates),
             EditorButton::Save => language.tr(Tr::SaveScript),
             EditorButton::Library(i) => profile
@@ -645,6 +677,9 @@ fn update_console(
         return;
     };
     let mut lines = vec![language.tr(Tr::EditorHint).to_string()];
+    if looks_like_rust(&editor.buffer.text) {
+        lines.push(language.tr(Tr::RustHint).to_string());
+    }
     if let Some(notice) = &editor.notice {
         lines.push(notice.clone());
     }

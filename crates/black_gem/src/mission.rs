@@ -29,6 +29,7 @@ pub enum Tab {
     Expedition,
     Research,
     Codex,
+    Grimoire,
     Stats,
 }
 
@@ -85,6 +86,9 @@ struct CodexList;
 #[derive(Component)]
 struct StatsText;
 
+#[derive(Component)]
+struct GrimoireText;
+
 #[derive(Resource)]
 struct MenuFont(Handle<Font>);
 
@@ -116,6 +120,7 @@ impl Plugin for MissionPlugin {
                     update_research,
                     update_codex,
                     update_stats,
+                    update_grimoire,
                     launch_with_enter,
                 ),
             );
@@ -186,7 +191,13 @@ fn spawn_menu(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         ..default()
                     })
                     .with_children(|row| {
-                        for tab in [Tab::Expedition, Tab::Research, Tab::Codex, Tab::Stats] {
+                        for tab in [
+                            Tab::Expedition,
+                            Tab::Research,
+                            Tab::Codex,
+                            Tab::Grimoire,
+                            Tab::Stats,
+                        ] {
                             row.spawn((TabButton(tab), small_button(), BackgroundColor(CARD)))
                                 .observe(move |_: On<PointerClick>, mut menu: ResMut<MissionMenu>| {
                                     menu.tab = tab;
@@ -233,6 +244,17 @@ fn spawn_menu(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         row_gap: Val::Px(8.0),
                         flex_wrap: FlexWrap::Wrap,
                         justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                ));
+                panel.spawn((
+                    TabPage(Tab::Grimoire),
+                    GrimoireText,
+                    Text::default(),
+                    style(&font, 15.0, Color::srgb(0.88, 0.88, 0.95)),
+                    Node {
+                        display: Display::None,
+                        max_width: Val::Px(820.0),
                         ..default()
                     },
                 ));
@@ -416,6 +438,7 @@ fn update_tabs(
             (Tab::Research, true) => "Recherche",
             (Tab::Research, false) => "Research",
             (Tab::Codex, _) => "Codex",
+            (Tab::Grimoire, _) => "Grimoire",
             (Tab::Stats, true) => "Statistiques",
             (Tab::Stats, false) => "Statistics",
         }
@@ -663,6 +686,51 @@ fn update_stats(
         lines.push(format!("  {name} : {time}"));
     }
     text.0 = lines.join("\n");
+}
+
+/// Grimoire du code : les deux actes de l'apprentissage, et les règles de l'ownership.
+fn update_grimoire(language: Res<Language>, mut text: Single<&mut Text, With<GrimoireText>>) {
+    if !language.is_changed() && !text.0.is_empty() {
+        return;
+    }
+    text.0 = if *language == Language::French {
+        "ACTE I — Python, le langage des drones\n\
+         Variables, conditions, boucles, fonctions, listes : les golems apprennent à livrer, \
+         sertir et miner. Les erreurs arrivent pendant l'exécution.\n\n\
+         ACTE II — Rust, le langage des machines lourdes\n\
+         Les ingénieurs de l'Arche ont retrouvé le compilateur des Anciens. Un programme Rust \
+         est vérifié avant de partir : s'il est accepté, le golem ne confondra jamais un nombre \
+         et un texte, et il exécute deux fois plus d'instructions qu'en Python.\n\n\
+         Les règles de l'ownership (la propriété) :\n\
+         1. Chaque valeur a un seul propriétaire : prendre() donne un Objet au golem.\n\
+         2. Donner, c'est déplacer : après deposer(objet), le golem ne l'a plus. \
+         S'en resservir est refusé (erreur E0382).\n\
+         3. Prêter, c'est & : f(&v) lit sans prendre. f(&mut v) modifie, \
+         et une seule référence &mut à la fois (E0499).\n\
+         4. Les nombres sont Copy : ils se copient au lieu de se déplacer.\n\n\
+         Pour commencer : dans l'éditeur d'un golem, bascule les modèles sur « Rust ». \
+         Chaque erreur affiche le code de rustc (E0382…), comme dans le vrai Rust : \
+         tu peux la chercher dans la documentation officielle."
+    } else {
+        "ACT I — Python, the language of drones\n\
+         Variables, conditions, loops, functions, lists: golems learn to deliver, set gems \
+         and mine. Errors show up while the program runs.\n\n\
+         ACT II — Rust, the language of heavy machines\n\
+         The Ark's engineers recovered the Ancients' compiler. A Rust program is checked \
+         before it leaves: once accepted, the golem will never mix up a number and a text, \
+         and it runs twice as many instructions as in Python.\n\n\
+         The rules of ownership:\n\
+         1. Every value has a single owner: take() gives the golem an Item.\n\
+         2. Giving is moving: after drop(item), the golem no longer has it. \
+         Using it again is refused (error E0382).\n\
+         3. Lending is &: f(&v) reads without taking. f(&mut v) modifies, \
+         and only one &mut reference at a time (E0499).\n\
+         4. Numbers are Copy: they are copied instead of moved.\n\n\
+         To start: in a golem's editor, switch the templates to \"Rust\". \
+         Every error shows the rustc code (E0382…), just like real Rust: \
+         you can look it up in the official documentation."
+    }
+    .to_string();
 }
 
 /// Description d'un format : nom, durée, carte, journées, paliers.

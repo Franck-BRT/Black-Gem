@@ -830,6 +830,51 @@ mod tests {
     }
 
     #[test]
+    fn a_rust_golem_moves_its_item_into_a_tower() {
+        let mut sim = Simulation::new(4, 96);
+        let hq = sim.hq().tile;
+        let tile = Tile::new(hq.x - 4, hq.y + 1);
+        sim.queue(Command::Build {
+            kind: BuildingKind::Tower,
+            tile,
+            dir: Dir::East,
+        });
+        sim.queue(Command::SpawnGolem);
+        sim.step();
+        let stock = sim.stock;
+        sim.queue(Command::RunProgram {
+            golem: 1,
+            source: format!(
+                "fn main() {{\n    let tour = ({}, {});\n    aller_vers(qg());\n    let cristal = prendre().expect(\"rien au QG\");\n    aller_vers(tour);\n    match deposer(cristal) {{\n        Ok(()) => println!(\"fini {{}}\", munitions(tour)),\n        Err(_) => println!(\"raté\"),\n    }}\n}}",
+                tile.x, tile.y
+            ),
+        });
+        run(&mut sim, 200);
+        let golem = sim.golem(1).unwrap();
+        assert!(golem.rust);
+        assert_eq!(golem.status, GolemStatus::Finished, "{:?}", golem.status);
+        assert_eq!(golem.log, vec!["fini 6"]);
+        assert_eq!(golem.carrying, None);
+        assert_eq!(sim.stock, stock - 1);
+    }
+
+    #[test]
+    fn rust_ownership_errors_stop_the_golem_before_it_runs() {
+        let mut sim = Simulation::new(4, 96);
+        sim.queue(Command::SpawnGolem);
+        sim.queue(Command::RunProgram {
+            golem: 1,
+            source: "fn main() {\n    let o = prendre().unwrap();\n    let _ = deposer(o);\n    let _ = deposer(o);\n}".into(),
+        });
+        run(&mut sim, 3);
+        let GolemStatus::Error(error) = &sim.golem(1).unwrap().status else {
+            panic!("{:?}", sim.golem(1).unwrap().status);
+        };
+        assert_eq!(error.line, 4);
+        assert!(error.message(gem_script::Lang::English).contains("E0382"));
+    }
+
+    #[test]
     fn golem_errors_are_reported_with_their_line() {
         let mut sim = Simulation::new(4, 96);
         sim.queue(Command::SpawnGolem);

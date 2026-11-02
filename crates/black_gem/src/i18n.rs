@@ -58,6 +58,7 @@ pub enum Tr {
     StatusFinished,
     StatusError,
     EditorHint,
+    RustHint,
     Console,
     NoGolems,
     Drilling,
@@ -85,8 +86,8 @@ impl Language {
     pub fn tr(self, key: Tr) -> &'static str {
         use Language::*;
         match (key, self) {
-            (Tr::Subtitle, French) => "Prototype M6 — expédition",
-            (Tr::Subtitle, English) => "Prototype M6 — expedition",
+            (Tr::Subtitle, French) => "Prototype M7 — expédition",
+            (Tr::Subtitle, English) => "Prototype M7 — expedition",
             (Tr::Seed, French) => "Graine",
             (Tr::Seed, English) => "Seed",
             (Tr::Day, French) => "Jour",
@@ -103,7 +104,7 @@ impl Language {
                 "B : foreuse   C : convoyeur   G : taillerie   F : four   T : tour   O : Grand foreur   X : démolir   R : tourner\n\
                  clic gauche : construire (glisser pour une ligne de convoyeurs)   Échap : annuler\n\
                  gemmes : clic sur une gemme de l'inventaire, puis sur une tour   U : retirer une gemme\n\
-                 golems : clic sur un golem (ou dans la liste) pour écrire son programme en Python\n\
+                 golems : clic sur un golem (ou dans la liste) pour écrire son programme (Python ou Rust)\n\
                  ZQSD / flèches : déplacer   A / E : pivoter   molette : zoom   clic droit + glisser : orienter\n\
                  H : QG   V : Cœur   Espace : pause   1 / 2 / 3 : vitesse   N : nouvelle expédition   L : langue"
             }
@@ -111,7 +112,7 @@ impl Language {
                 "B: drill   C: conveyor   G: gem cutter   F: furnace   T: tower   O: Great drill   X: demolish   R: rotate\n\
                  left click: build (drag for a line of conveyors)   Esc: cancel\n\
                  gems: click a gem in the inventory, then a tower   U: remove a gem\n\
-                 golems: click a golem (or in the list) to write its program in Python\n\
+                 golems: click a golem (or in the list) to write its program (Python or Rust)\n\
                  WASD / arrows: move   Q / E: rotate   wheel: zoom   right click + drag: orbit\n\
                  H: HQ   V: Core   Space: pause   1 / 2 / 3: speed   N: new expedition   L: language"
             }
@@ -195,6 +196,8 @@ impl Language {
             (Tr::StatusError, English) => "error",
             (Tr::EditorHint, French) => "Clic : écrire · Échap : retour au jeu · Ctrl+V : coller ·",
             (Tr::EditorHint, English) => "Click: type · Esc: back to the game · Ctrl+V: paste ·",
+            (Tr::RustHint, French) => "Rust : vérifié avant de partir · 2× plus rapide",
+            (Tr::RustHint, English) => "Rust: checked before running · 2× faster",
             (Tr::Console, French) => "Console",
             (Tr::Console, English) => "Console",
             (Tr::NoGolems, French) => "Aucun golem : fabrique-en un au QG.",

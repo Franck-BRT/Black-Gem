@@ -259,7 +259,10 @@ fn script_name(source: &str, n: usize) -> String {
     source
         .lines()
         .next()
-        .and_then(|line| line.trim().strip_prefix('#'))
+        .and_then(|line| {
+            let line = line.trim();
+            line.strip_prefix("//").or_else(|| line.strip_prefix('#'))
+        })
         .and_then(|comment| comment.split([':', '-', '.']).next())
         .map(|name| name.trim().chars().take(20).collect::<String>())
         .filter(|name| !name.is_empty())

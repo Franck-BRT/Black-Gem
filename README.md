@@ -6,7 +6,65 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M6 — passe graphique
+## État actuel : prototype M7 — Rust et l'Acte II
+
+Les golems se programment aussi en **Rust**. Un programme Rust est **vérifié avant de
+partir**, comme le ferait `rustc` : types, mutabilité (`let mut`), **ownership** et
+**emprunts**. Chaque erreur est expliquée en français ou en anglais, avec le code de l'erreur
+de `rustc` (E0382…) pour la retrouver dans la documentation officielle. En échange, un golem
+Rust exécute **deux fois plus d'instructions** par seconde.
+
+L'ownership devient une mécanique de jeu : un objet porté est une **valeur** de type `Objet`.
+`prendre()` la donne au golem, `deposer(objet)` / `sertir(gemme)` la **déplace** dans le
+bâtiment, et le compilateur refuse qu'on s'en serve ensuite :
+
+```rust
+fn main() {
+    loop {
+        for tour in tours() {
+            if !a_gemme(tour) && gemmes() > 0 {
+                aller_vers(qg());
+                if let Some(gemme) = prendre_gemme() {
+                    let grade = gemme.grade(); // lire n'est pas prendre
+                    aller_vers(tour);
+                    match sertir(gemme) {
+                        Ok(()) => println!("Gemme {grade} sertie"),
+                        Err(g) => println!("Refusée : {}", g.grade()),
+                    }
+                    // gemme.grade() ici : refusé, « gemme » a été déplacée (E0382)
+                }
+            }
+        }
+        attendre(2);
+    }
+}
+```
+
+- **Le Rust du jeu** : `let` / `let mut`, entiers, booléens, `&str` et `String`, tuples, `Vec`,
+  `if` / `else` (aussi comme valeur), `loop` (avec `break valeur`), `while`, `while let`,
+  `for` sur `0..n`, `(a..=b).rev()`, `&v`, `v.iter()`, `v.iter_mut()`, `.enumerate()` ;
+  `fn` avec types et `return` ; `match` (motifs, gardes, intervalles, vérification que tous
+  les cas sont couverts), `if let`, `let … else` ; `Option` et `Result` (`Some`, `None`,
+  `Ok`, `Err`, `?`, `unwrap`, `expect`, `unwrap_or`…) ; `struct`, `enum` (avec données),
+  `impl` et méthodes (`&self`, `&mut self`, `self`), `#[derive(Debug, Clone, Copy, PartialEq)]` ;
+  `const` ; `println!`, `format!` (`{}`, `{:?}`, `{nom}`), `panic!`, `assert!`, `vec!`.
+- **Vérifications** : types (avec déduction), valeurs déplacées (E0382, y compris d'un tour de
+  boucle à l'autre), variables non initialisées (E0381), mutabilité (E0384, E0596), emprunts
+  en conflit dans un appel (E0499, E0502), déplacement hors d'une référence ou d'un `Vec`
+  (E0507), `match` incomplet (E0004), affichage sans `Debug` (E0277)…
+- Les fonctions du jeu ont des **types** : `tours() -> Vec<Position>`,
+  `ennemi_proche() -> Option<Position>`, `deposer(objet: Objet) -> Result<(), Objet>`,
+  `avancer(Direction::Nord)`… en français ou en anglais.
+- L'éditeur propose les quatre **modèles en Rust** (bouton « Python / Rust » devant les
+  modèles), indente après `{` et désindente sur `}`. L'inspecteur affiche les valeurs à la
+  manière de Rust (`Some((3, 4))`, `Objet { est_gemme: true, grade: 2 }`).
+- L'Arche a un **Grimoire** : les deux actes de l'apprentissage et les règles de l'ownership.
+
+Simplifications, signalées par des messages clairs : tous les entiers sont des `i64` ; une
+référence `&mut` se passe en argument mais ne se garde pas dans une variable ; pas encore de
+traits, de génériques ni de fermetures (`|x| …`).
+
+### Passe graphique (M6)
 
 - **Ciel** : dôme dégradé jour/nuit, **géante gazeuse** à bandes au-dessus de l'horizon, soleil
   avec halo, **étoiles** la nuit.
@@ -151,7 +209,8 @@ python3 -m http.server -d dist/web 8080            # puis ouvrir http://localhos
 ## Organisation
 
 ```
-crates/gem_script/ le langage du jeu : sous-ensemble de Python, compilateur, machine virtuelle
+crates/gem_script/ les langages du jeu : sous-ensembles de Python et de Rust (avec vérification
+                   des types et de l'ownership), compilateur, machine virtuelle
 crates/gem_sim/    simulation déterministe, indépendante du moteur : carte, bâtiments,
                    logistique, ennemis, vagues ; pilotée par des ordres (`Command`)
 crates/black_gem/  le jeu : rendu Bevy, shaders de courbure, caméra, construction, interface

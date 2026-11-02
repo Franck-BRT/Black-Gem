@@ -260,6 +260,24 @@ L'interface du jeu est elle aussi disponible en français et en anglais.
   ce qu'elles soient finies, comme dans 7 Billion Humans.
 - L'arbre syntaxique est commun : le sous-ensemble Rust (Acte II) réutilisera compilateur et VM.
 
+### 7.5 ter Le Rust tel qu'implémenté (M7)
+
+- Analyse, puis **vérification** (types avec déduction par unification, mutabilité,
+  ownership par analyse des chemins d'exécution, emprunts en conflit dans un appel,
+  exhaustivité des `match`), puis traduction dans l'arbre syntaxique commun : même bytecode,
+  même machine virtuelle, même déterminisme que Python.
+- Représentation : `Some(x)` est `x`, `Ok(x)` est `(true, x)`, une structure est la liste de
+  ses champs, une variante `("Nom", données…)`. Une référence est la valeur elle-même :
+  `f(&mut x)` passe `x`, et la fonction renvoie sa nouvelle valeur (« copie-retour ») — sûr
+  parce que les règles d'emprunt interdisent tout autre accès pendant l'appel.
+- Les objets portés par les golems sont des valeurs `Objet` (ni `Copy` ni `Clone`) :
+  `prendre() -> Option<Objet>`, `deposer(objet) -> Result<(), Objet>` (l'objet est rendu en
+  cas d'échec).
+- Un golem Rust exécute 80 instructions par tick (40 en Python).
+- Pas encore : traits, génériques, fermetures, durées de vie explicites, `&mut` gardé dans une
+  variable. Prochaines étapes de l'Acte II : traits et itérateurs, puis concurrence entre
+  golems.
+
 ### 7.6 Mobile
 
 Sur iPhone, l'éditeur propose un **mode blocs/cartes** (on assemble les instructions
@@ -343,7 +361,7 @@ crates/
 | **M4** ✅ | Formats d'expédition (Éclaireur, Expédition, Grand forage, Colonie), écran de départ, Cœur et Grand foreur, paliers avec boss, extraction et décollage |
 | **M5** ✅ | L'Arche : éclats noirs, 12 recherches à prérequis, codex des 31 gemmes, bibliothèque de scripts, statistiques, sauvegarde (fichier / navigateur) |
 | **M6** ✅ | Passe graphique « DSP » : ciel et géante gazeuse, étoiles, eau animée, particules, atterrissage de la capsule, relief ombré, chevrons de convoyeurs, grille de construction, SSAO (ordinateur) |
-| **M7** | Sous-ensemble Rust + Acte II (ownership comme mécanique)                |
+| **M7** ✅ | Sous-ensemble Rust vérifié comme par rustc (types, ownership, emprunts), objets du jeu qui se déplacent, modèles Rust, Grimoire de l'Acte II |
 | **M8** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
 | **M9** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions   |
 | **M10** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |

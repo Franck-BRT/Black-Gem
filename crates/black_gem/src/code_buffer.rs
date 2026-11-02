@@ -39,15 +39,26 @@ impl CodeBuffer {
             .replace("\r\n", "\n")
             .replace('\r', "\n")
             .replace('\t', "    ");
+        // Rust : « } » tapé en début de ligne revient d'un cran.
+        if s == "}" {
+            let start = self.line_start();
+            let before = &self.text[start..self.cursor];
+            if before.len() >= INDENT && before.chars().all(|c| c == ' ') {
+                self.text
+                    .replace_range(self.cursor - INDENT..self.cursor, "");
+                self.cursor -= INDENT;
+            }
+        }
         self.text.insert_str(self.cursor, &s);
         self.cursor += s.len();
     }
 
-    /// Entrée : nouvelle ligne, avec la même indentation (et un cran de plus après « : »).
+    /// Entrée : nouvelle ligne, avec la même indentation (et un cran de plus après « : »
+    /// en Python, ou après « { » en Rust).
     pub fn newline(&mut self) {
         let line = &self.text[self.line_start()..self.cursor];
         let mut indent = line.len() - line.trim_start_matches(' ').len();
-        if line.trim_end().ends_with(':') {
+        if line.trim_end().ends_with([':', '{', '(', '[']) {
             indent += INDENT;
         }
         self.insert(&format!("\n{}", " ".repeat(indent)));
@@ -154,6 +165,16 @@ mod tests {
         b.insert("x = 1");
         b.newline();
         assert_eq!(b.text, "while True:\n    x = 1\n    ");
+    }
+
+    #[test]
+    fn rust_braces_indent_and_dedent() {
+        let mut b = buffer("fn main() {");
+        b.newline();
+        b.insert("loop {");
+        b.newline();
+        b.insert("}");
+        assert_eq!(b.text, "fn main() {\n    loop {\n    }");
     }
 
     #[test]

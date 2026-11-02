@@ -7,19 +7,25 @@
 //! - **déterministe** : uniquement des entiers, aucune horloge ni hasard ;
 //! - **pédagogique** : messages d'erreur en français et en anglais, avec suggestions.
 //!
-//! L'arbre syntaxique est indépendant de la syntaxe : un analyseur pour un sous-ensemble
-//! de Rust pourra produire le même arbre et réutiliser compilateur et machine virtuelle.
+//! Deux langages : un sous-ensemble de Python ([`compile_python`]) et un sous-ensemble de
+//! Rust ([`compile_rust`], vérifié comme par `rustc` : types, ownership, emprunts). Les deux
+//! produisent le même arbre syntaxique, compilé pour la même machine virtuelle.
 
 pub mod ast;
 pub mod compiler;
 pub mod error;
+pub mod format;
 pub mod lexer;
 pub mod parser;
+pub mod rust;
 pub mod value;
 pub mod vm;
 
 pub use compiler::{Api, HostFunction, Program};
 pub use error::{ErrorKind, Lang, ScriptError};
+pub use rust::{
+    HostType, RustApi, RustEnum, RustFunction, RustOpaque, compile_rust, looks_like_rust,
+};
 pub use value::Value;
 pub use vm::{Host, HostReply, Step, Vm};
 

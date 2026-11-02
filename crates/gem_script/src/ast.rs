@@ -1,4 +1,7 @@
-//! Arbre syntaxique, commun aux langages du jeu (Python aujourd'hui, Rust ensuite).
+//! Arbre syntaxique, commun aux langages du jeu : l'analyseur Python le produit directement,
+//! le sous-ensemble Rust y est traduit après vérification des types et de l'ownership.
+
+use crate::{compiler::Builtin, value::Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
@@ -7,6 +10,10 @@ pub enum BinOp {
     Mul,
     FloorDiv,
     Mod,
+    /// Division entière tronquée vers zéro (Rust).
+    Div,
+    /// Reste du signe du dividende (Rust).
+    Rem,
     Pow,
     Eq,
     Ne,
@@ -23,7 +30,8 @@ impl BinOp {
             BinOp::Sub => "-",
             BinOp::Mul => "*",
             BinOp::FloorDiv => "//",
-            BinOp::Mod => "%",
+            BinOp::Mod | BinOp::Rem => "%",
+            BinOp::Div => "/",
             BinOp::Pow => "**",
             BinOp::Eq => "==",
             BinOp::Ne => "!=",
@@ -53,6 +61,23 @@ pub enum Expr {
     Index(Box<Expr>, Box<Expr>),
     /// `variable.methode(arguments)` (seule `append` existe pour l'instant).
     Method(String, String, Vec<Expr>),
+    /// Valeur constante quelconque (descriptions de types pour l'affichage Rust…).
+    Const(Value),
+    /// Appel direct d'une fonction du jeu (par son identifiant).
+    HostCall(u32, Vec<Expr>),
+    /// Appel direct d'une fonction intégrée (y compris celles réservées à Rust).
+    BuiltinCall(Builtin, Vec<Expr>),
+}
+
+/// Arrêt du programme sur une erreur voulue (Rust : `panic!`, `unwrap()`…).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanicKind {
+    /// `panic!(message)` : le message est sur la pile.
+    Message,
+    /// `unwrap()` sur `None`.
+    UnwrapNone,
+    /// `unwrap()` sur `Err(…)`.
+    UnwrapErr,
 }
 
 /// Ce qui peut recevoir une valeur.
@@ -83,4 +108,7 @@ pub enum StmtKind {
     Break,
     Continue,
     Pass,
+    Panic(PanicKind, Option<Expr>),
+    /// Fin du programme principal (`return` dans `fn main`).
+    Exit,
 }
