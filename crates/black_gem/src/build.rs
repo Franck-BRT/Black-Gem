@@ -384,6 +384,45 @@ fn draw_preview(
         return;
     };
     let map = &sim.map;
+    // Grille de construction autour du pointeur (façon Dyson Sphere Program), qui s'estompe.
+    if let Some(cursor) = state.cursor {
+        const RADIUS: i32 = 7;
+        let corner = |x: i32, y: i32| {
+            let half = world::half_extent(map);
+            let p = Vec2::new(
+                x as f32 * world::TILE_SIZE - half,
+                y as f32 * world::TILE_SIZE - half,
+            );
+            bend(
+                Vec3::new(p.x, world::ground_height(map, p) + 0.04, p.y),
+                curvature.params,
+            )
+        };
+        let fade = |x: i32, y: i32| {
+            let d = (((x - cursor.x) as f32 - 0.5).powi(2) + ((y - cursor.y) as f32 - 0.5).powi(2))
+                .sqrt();
+            (1.0 - d / RADIUS as f32).max(0.0)
+        };
+        for y in cursor.y - RADIUS..=cursor.y + RADIUS + 1 {
+            for x in cursor.x - RADIUS..=cursor.x + RADIUS + 1 {
+                let size = map.size as i32;
+                if !(0..=size).contains(&x) || !(0..=size).contains(&y) {
+                    continue;
+                }
+                let alpha = fade(x, y);
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let color = LinearRgba::rgb(0.3, 1.2, 1.6) * alpha * 0.6;
+                if x < size {
+                    gizmos.line(corner(x, y), corner(x + 1, y), color);
+                }
+                if y < size {
+                    gizmos.line(corner(x, y), corner(x, y + 1), color);
+                }
+            }
+        }
+    }
     let mut budget = sim.stock;
     for (tile, dir) in planned_tiles(&state, sim.core) {
         let ok = match tool {

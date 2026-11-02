@@ -85,8 +85,8 @@ impl Language {
     pub fn tr(self, key: Tr) -> &'static str {
         use Language::*;
         match (key, self) {
-            (Tr::Subtitle, French) => "Prototype M5 — expédition",
-            (Tr::Subtitle, English) => "Prototype M5 — expedition",
+            (Tr::Subtitle, French) => "Prototype M6 — expédition",
+            (Tr::Subtitle, English) => "Prototype M6 — expedition",
             (Tr::Seed, French) => "Graine",
             (Tr::Seed, English) => "Seed",
             (Tr::Day, French) => "Jour",

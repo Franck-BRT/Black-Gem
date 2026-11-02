@@ -10,8 +10,10 @@ use gem_sim::{GemColor, Map, Pos, Simulation, Terrain, Tile, UNITS_PER_TILE, rng
 
 use crate::{
     camera::RtsCamera,
-    curvature::{CurvedMaterial, curved},
+    curvature::{CurvedMaterial, Water, WaterMaterial, curved},
+    mission::MissionMenu,
     palette::{self, gem_rgb},
+    particles::{Burst, Style},
     sim::{NewPlanet, Sim},
 };
 
@@ -28,8 +30,14 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_planet)
-            .add_systems(Update, respawn_planet.run_if(on_message::<NewPlanet>));
+        app.add_systems(Startup, spawn_planet).add_systems(
+            Update,
+            (
+                respawn_planet.run_if(on_message::<NewPlanet>),
+                animate_landing,
+            )
+                .chain(),
+        );
     }
 }
 
@@ -113,13 +121,15 @@ pub fn respawn_planet(
     sim: Res<Sim>,
     meshes: ResMut<Assets<Mesh>>,
     materials: ResMut<Assets<CurvedMaterial>>,
+    waters: ResMut<Assets<WaterMaterial>>,
     mut camera: Single<&mut RtsCamera>,
 ) {
     for entity in &planet {
         commands.entity(entity).despawn();
     }
-    camera.look_at(hq_center(&sim));
-    spawn_planet(commands, sim, meshes, materials);
+    // Plongée de la caméra vers le QG pendant que la capsule atterrit.
+    camera.intro(hq_center(&sim));
+    spawn_planet(commands, sim, meshes, materials, waters);
 }
 
 fn spawn_planet(
@@ -127,6 +137,7 @@ fn spawn_planet(
     sim: Res<Sim>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<CurvedMaterial>>,
+    mut waters: ResMut<Assets<WaterMaterial>>,
 ) {
     let map = &sim.map;
 
@@ -152,13 +163,16 @@ fn spawn_planet(
                     .subdivisions(96),
             ),
         ),
-        MeshMaterial3d(materials.add(curved(StandardMaterial {
-            base_color: Color::srgba(0.05, 0.32, 0.42, 0.82),
-            perceptual_roughness: 0.06,
-            reflectance: 0.6,
-            alpha_mode: AlphaMode::Blend,
-            ..default()
-        }))),
+        MeshMaterial3d(waters.add(WaterMaterial {
+            base: StandardMaterial {
+                base_color: Color::srgba(0.04, 0.28, 0.4, 0.8),
+                perceptual_roughness: 0.04,
+                reflectance: 0.7,
+                alpha_mode: AlphaMode::Blend,
+                ..default()
+            },
+            extension: Water::default(),
+        })),
         Transform::from_xyz(0.0, water_height(map), 0.0),
         NotShadowCaster,
     ));
@@ -192,9 +206,36 @@ fn tile_color(map: &Map, x: u32, y: u32) -> [f32; 4] {
         }
         Terrain::Ore => [0.36, 0.4, 0.46],
     };
+    // Relief : les creux s'assombrissent, les crêtes s'éclaircissent ; les pentes raides
+    // prennent une teinte de roche nue.
+    let h = map.tile_height(x, y);
+    let max = map.size - 1;
+    let around = [
+        (x.saturating_sub(2), y),
+        ((x + 2).min(max), y),
+        (x, y.saturating_sub(2)),
+        (x, (y + 2).min(max)),
+    ]
+    .map(|(nx, ny)| map.tile_height(nx, ny));
+    let average = around.iter().sum::<i32>() / 4;
+    let cavity = ((h - average) as f32 / 140.0).clamp(-0.22, 0.16);
+    let corners = [
+        map.vertex_height(x, y),
+        map.vertex_height(x + 1, y),
+        map.vertex_height(x, y + 1),
+        map.vertex_height(x + 1, y + 1),
+    ];
+    let slope = (corners.iter().max().unwrap() - corners.iter().min().unwrap()) as f32 / 160.0;
+    let rock = [0.26, 0.22, 0.22];
+    let steep = slope.clamp(0.0, 0.6);
+    let base = [
+        base[0] + (rock[0] - base[0]) * steep,
+        base[1] + (rock[1] - base[1]) * steep,
+        base[2] + (rock[2] - base[2]) * steep,
+    ];
     let jitter =
         (gem_sim::rng::hash2(map.seed ^ 0xC010, x as i32, y as i32) % 1000) as f32 / 1000.0;
-    let shade = 0.92 + 0.16 * jitter;
+    let shade = (0.92 + 0.16 * jitter) * (1.0 + cavity);
     [base[0] * shade, base[1] * shade, base[2] * shade, 1.0]
 }
 
@@ -402,37 +443,51 @@ fn spawn_headquarters(
         ..default()
     }));
 
-    let parts: [(Handle<Mesh>, &Handle<CurvedMaterial>, Transform); 5] = [
-        (
-            meshes.add(Cylinder::new(2.3, 0.25).mesh().resolution(6)),
-            &pad,
-            Transform::from_translation(origin + Vec3::Y * 0.12),
-        ),
+    // L'aire d'atterrissage reste au sol…
+    commands.spawn((
+        PlanetEntity,
+        Mesh3d(meshes.add(Cylinder::new(2.3, 0.25).mesh().resolution(6))),
+        MeshMaterial3d(pad),
+        Transform::from_translation(origin + Vec3::Y * 0.12),
+    ));
+
+    // … et la capsule descend du ciel au début de l'expédition (voir `animate_landing`).
+    let capsule = commands
+        .spawn((
+            PlanetEntity,
+            Landing {
+                elapsed: 0.0,
+                ground: origin,
+            },
+            Transform::from_translation(origin + Vec3::Y * LANDING_ALTITUDE),
+            Visibility::default(),
+        ))
+        .id();
+    let parts: [(Handle<Mesh>, &Handle<CurvedMaterial>, Transform); 4] = [
         (
             meshes.add(Cylinder::new(1.6, 2.2).mesh().resolution(12)),
             &hull,
-            Transform::from_translation(origin + Vec3::Y * 1.35),
+            Transform::from_translation(Vec3::Y * 1.35),
         ),
         (
             meshes.add(Sphere::new(1.6).mesh().uv(24, 12)),
             &hull,
-            Transform::from_translation(origin + Vec3::Y * 2.45)
-                .with_scale(Vec3::new(1.0, 0.7, 1.0)),
+            Transform::from_translation(Vec3::Y * 2.45).with_scale(Vec3::new(1.0, 0.7, 1.0)),
         ),
         (
             meshes.add(Torus::new(1.7, 1.85)),
             &glow,
-            Transform::from_translation(origin + Vec3::Y * 1.0),
+            Transform::from_translation(Vec3::Y * 1.0),
         ),
         (
             meshes.add(Cylinder::new(0.08, 2.0)),
             &glow,
-            Transform::from_translation(origin + Vec3::Y * 4.1),
+            Transform::from_translation(Vec3::Y * 4.1),
         ),
     ];
     for (mesh, material, transform) in parts {
         commands.spawn((
-            PlanetEntity,
+            ChildOf(capsule),
             Mesh3d(mesh),
             MeshMaterial3d(material.clone()),
             transform,
@@ -445,17 +500,17 @@ fn spawn_headquarters(
         let angle = i as f32 * std::f32::consts::FRAC_PI_2 + std::f32::consts::FRAC_PI_4;
         let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
         commands.spawn((
-            PlanetEntity,
+            ChildOf(capsule),
             Mesh3d(leg.clone()),
             MeshMaterial3d(hull.clone()),
-            Transform::from_translation(origin + Vec3::Y * 0.8 + dir * 1.75)
+            Transform::from_translation(Vec3::Y * 0.8 + dir * 1.75)
                 .with_rotation(Quat::from_axis_angle(dir.cross(Vec3::Y), -0.35)),
         ));
     }
 
     // Balise lumineuse du QG.
     commands.spawn((
-        PlanetEntity,
+        ChildOf(capsule),
         PointLight {
             color: Color::srgb(0.3, 0.9, 1.0),
             intensity: 60_000.0,
@@ -463,6 +518,42 @@ fn spawn_headquarters(
             shadow_maps_enabled: false,
             ..default()
         },
-        Transform::from_translation(origin + Vec3::Y * 5.5),
+        Transform::from_translation(Vec3::Y * 5.5),
     ));
+}
+
+/// Altitude de départ de la capsule, et durée de la descente (secondes).
+const LANDING_ALTITUDE: f32 = 45.0;
+const LANDING_SECONDS: f32 = 3.2;
+
+/// Capsule en cours d'atterrissage.
+#[derive(Component)]
+struct Landing {
+    elapsed: f32,
+    ground: Vec3,
+}
+
+/// Descente de la capsule : freinage progressif, flammes des rétrofusées, nuage au contact.
+fn animate_landing(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    menu: Res<MissionMenu>,
+    mut capsules: Query<(Entity, &mut Landing, &mut Transform)>,
+    mut bursts: MessageWriter<Burst>,
+) {
+    if menu.open {
+        return;
+    }
+    for (entity, mut landing, mut transform) in &mut capsules {
+        landing.elapsed += time.delta_secs();
+        let t = (landing.elapsed / LANDING_SECONDS).min(1.0);
+        let remaining = (1.0 - t).powi(3);
+        transform.translation = landing.ground + Vec3::Y * LANDING_ALTITUDE * remaining;
+        if t < 1.0 {
+            bursts.write(Burst::new(transform.translation, Style::Flame, 3));
+        } else {
+            bursts.write(Burst::new(landing.ground + Vec3::Y * 0.3, Style::Dust, 40));
+            commands.entity(entity).remove::<Landing>();
+        }
+    }
 }

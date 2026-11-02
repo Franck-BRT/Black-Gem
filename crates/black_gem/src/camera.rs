@@ -37,6 +37,8 @@ pub struct RtsCamera {
     target_yaw: f32,
     target_pitch: f32,
     target_distance: f32,
+    /// Vitesse de rapprochement des valeurs visées (lente pendant la plongée d'ouverture).
+    smoothing: f32,
 }
 
 impl RtsCamera {
@@ -51,7 +53,20 @@ impl RtsCamera {
             target_yaw: yaw,
             target_pitch: pitch,
             target_distance: distance,
+            smoothing: 12.0,
         }
+    }
+
+    /// Plan d'ouverture d'une expédition : vue de haut et de loin, puis lente plongée vers le QG.
+    pub fn intro(&mut self, focus: Vec2) {
+        self.focus = Vec3::new(focus.x, self.focus.y, focus.y);
+        self.target_focus = focus;
+        self.distance = MAX_DISTANCE;
+        self.pitch = MAX_PITCH - 0.1;
+        self.yaw = self.target_yaw - 1.2;
+        self.target_distance = 60.0;
+        self.target_pitch = 0.6;
+        self.smoothing = 1.2;
     }
 
     /// Recentre la caméra (par exemple sur le QG).
@@ -64,6 +79,8 @@ pub struct RtsCameraPlugin;
 
 impl Plugin for RtsCameraPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(PostStartup, enable_ambient_occlusion);
         app.add_systems(Startup, spawn_camera).add_systems(
             Update,
             (
@@ -93,6 +110,17 @@ fn spawn_camera(mut commands: Commands) {
             ..default()
         },
         Transform::default(),
+    ));
+}
+
+/// Sur ordinateur : occlusion ambiante (les recoins s'assombrissent, comme dans DSP).
+/// Elle demande de couper le MSAA ; le FXAA lisse alors les contours. Indisponible en WebGL2.
+#[cfg(not(target_arch = "wasm32"))]
+fn enable_ambient_occlusion(mut commands: Commands, camera: Single<Entity, Added<RtsCamera>>) {
+    commands.entity(*camera).insert((
+        bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
+        bevy::render::view::Msaa::Off,
+        bevy::anti_alias::fxaa::Fxaa::default(),
     ));
 }
 
@@ -199,7 +227,8 @@ fn apply_camera(
     camera.target_yaw = camera.target_yaw.rem_euclid(TAU);
 
     // Rapprochement exponentiel : indépendant de la fréquence d'affichage.
-    let t = 1.0 - (-12.0 * real_time.delta_secs()).exp();
+    camera.smoothing = (camera.smoothing + real_time.delta_secs() * 2.5).min(12.0);
+    let t = 1.0 - (-camera.smoothing * real_time.delta_secs()).exp();
     let ground =
         world::ground_height(&sim.map, camera.target_focus).max(world::water_height(&sim.map));
     let target_focus = Vec3::new(camera.target_focus.x, ground, camera.target_focus.y);

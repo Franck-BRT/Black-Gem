@@ -342,7 +342,7 @@ crates/
 | **M3** ✅ | Langage `gem_script` (sous-ensemble Python, VM déterministe), golems-drones, éditeur avec pas à pas, modèles |
 | **M4** ✅ | Formats d'expédition (Éclaireur, Expédition, Grand forage, Colonie), écran de départ, Cœur et Grand foreur, paliers avec boss, extraction et décollage |
 | **M5** ✅ | L'Arche : éclats noirs, 12 recherches à prérequis, codex des 31 gemmes, bibliothèque de scripts, statistiques, sauvegarde (fichier / navigateur) |
-| **M6** | Passe graphique « DSP » : HDR, bloom, matériaux, particules, jour/nuit  |
+| **M6** ✅ | Passe graphique « DSP » : ciel et géante gazeuse, étoiles, eau animée, particules, atterrissage de la capsule, relief ombré, chevrons de convoyeurs, grille de construction, SSAO (ordinateur) |
 | **M7** | Sous-ensemble Rust + Acte II (ownership comme mécanique)                |
 | **M8** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
 | **M9** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions   |

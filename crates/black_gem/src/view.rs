@@ -11,6 +11,7 @@ use gem_sim::{
 use crate::{
     curvature::{CurrentCurvature, CurvedMaterial, bend, curved},
     palette::{gem_glow, gem_rgb},
+    particles::{Burst, Style},
     sim::{NewPlanet, Sim},
     world::{self, PlanetEntity, crystal_mesh},
 };
@@ -31,6 +32,7 @@ impl Plugin for ViewPlugin {
                     (
                         animate_drills,
                         animate_conveyor_items,
+                        animate_chevrons,
                         animate_cutters,
                         animate_furnaces,
                         animate_core_drill,
@@ -129,6 +131,10 @@ struct EnemyView;
 
 #[derive(Component)]
 struct CutterSaw(u32);
+
+/// Flèche lumineuse qui défile le long d'un convoyeur, dans le sens de marche.
+#[derive(Component)]
+struct Chevron;
 
 #[derive(Component)]
 struct GolemRing(u32);
@@ -457,6 +463,7 @@ fn sync_buildings(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut view
                 // Chevron « > » qui indique le sens de marche.
                 for side in [-1.0f32, 1.0] {
                     parent.spawn((
+                        Chevron,
                         Mesh3d(m.chevron.clone()),
                         MeshMaterial3d(kit.glow_cyan.clone()),
                         Transform::from_xyz(0.0, 0.075, side * 0.07)
@@ -609,11 +616,23 @@ fn animate_drills(
     sim: Res<Sim>,
     time: Res<Time>,
     mut rotors: Query<(&DrillRotor, &mut Transform)>,
+    mut bursts: MessageWriter<Burst>,
+    mut timers: Local<HashMap<u32, u32>>,
 ) {
     for (rotor, mut transform) in &mut rotors {
-        if let Some(BuildingState::Drill { buffer, timer, .. }) =
-            sim.buildings.get(rotor.0).map(|b| &b.state)
+        if let Some(building) = sim.buildings.get(rotor.0)
+            && let BuildingState::Drill {
+                buffer,
+                timer,
+                color,
+            } = &building.state
         {
+            // Un cristal vient d'être extrait : gerbe d'étincelles de la couleur du filon.
+            let previous = timers.insert(rotor.0, *timer).unwrap_or(0);
+            if *timer < previous {
+                let at = world::pos_to_world(&sim.map, building.center()) + Vec3::Y * 0.7;
+                bursts.write(Burst::new(at, Style::Spark(Some(*color)), 6));
+            }
             // La foreuse tourne tant qu'elle produit, et s'arrête quand sa sortie est bouchée.
             let working = *buffer < 4;
             if working {
@@ -710,6 +729,9 @@ fn animate_furnaces(
     sim: Res<Sim>,
     kit: Res<Kit>,
     time: Res<Time>,
+    real_time: Res<Time<Real>>,
+    mut bursts: MessageWriter<Burst>,
+    mut next_spark: Local<f32>,
     mut cores: Query<(
         &FurnaceCore,
         &mut Transform,
@@ -723,9 +745,19 @@ fn animate_furnaces(
         else {
             continue;
         };
+        let spark_now = real_time.elapsed_secs() >= *next_spark;
         let (wanted, size) = match slots {
             [Some(gem), _] | [None, Some(gem)] => {
                 let heat = *progress as f32 / FUSE_TICKS as f32;
+                // Pendant la fusion, le four crache des étincelles de la couleur des gemmes.
+                if heat > 0.0
+                    && spark_now
+                    && let Some(building) = sim.buildings.get(core.0)
+                {
+                    let at = world::pos_to_world(&sim.map, building.center()) + Vec3::Y * 1.1;
+                    let count = 1 + (heat * 3.0) as u32;
+                    bursts.write(Burst::new(at, Style::Spark(Some(gem.main_color())), count));
+                }
                 let pulse = 0.08 * (time.elapsed_secs() * (4.0 + 10.0 * heat)).sin();
                 (
                     kit.gems[gem.main_color().index()].clone(),
@@ -738,6 +770,9 @@ fn animate_furnaces(
             material.0 = wanted;
         }
         transform.scale = Vec3::splat(size);
+    }
+    if real_time.elapsed_secs() >= *next_spark {
+        *next_spark = real_time.elapsed_secs() + 0.15;
     }
 }
 
@@ -823,6 +858,7 @@ fn light_tower_gems(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_enemies(
     mut commands: Commands,
     sim: Res<Sim>,
@@ -831,7 +867,22 @@ fn sync_enemies(
     time: Res<Time<Real>>,
     mut views: ResMut<Views>,
     mut transforms: Query<(&mut Transform, &mut MeshMaterial3d<CurvedMaterial>), With<EnemyView>>,
+    mut bursts: MessageWriter<Burst>,
 ) {
+    // Ennemis détruits : une gerbe d'éclats (bien plus grosse pour un boss).
+    for (id, entity) in &views.enemies {
+        if !sim.enemies.iter().any(|e| e.id == *id)
+            && let Ok((transform, _)) = transforms.get(*entity)
+        {
+            let boss = transform.scale.x > 1.5;
+            let (style, count) = if boss {
+                (Style::Boss, 45)
+            } else {
+                (Style::Corruption, 14)
+            };
+            bursts.write(Burst::new(transform.translation, style, count));
+        }
+    }
     views.enemies.retain(|id, entity| {
         let alive = sim.enemies.iter().any(|e| e.id == *id);
         if !alive {
@@ -898,14 +949,26 @@ fn draw_shots(
     curvature: Res<CurrentCurvature>,
     mut beams: Local<Vec<(gem_sim::Shot, f32)>>,
     mut last_tick: Local<Option<u64>>,
+    mut bursts: MessageWriter<Burst>,
 ) {
     let now = time.elapsed_secs();
     let seen = last_tick.unwrap_or(0);
-    let fresh = sim
+    let fresh: Vec<_> = sim
         .shots
         .iter()
         .filter(|s| last_tick.is_none() || s.tick > seen)
-        .map(|s| (*s, now));
+        .map(|s| (*s, now))
+        .collect();
+    // Étincelles à l'impact (limitées en vitesse rapide, où les tirs se comptent par dizaines).
+    for (shot, _) in fresh.iter().take(16) {
+        let at = world::pos_to_world(&sim.map, shot.to) + Vec3::Y * 0.4;
+        let count = if shot.source == ShotSource::Tower {
+            4
+        } else {
+            2
+        };
+        bursts.write(Burst::new(at, Style::Spark(shot.color), count));
+    }
     beams.extend(fresh);
     *last_tick = sim.shots.iter().map(|s| s.tick).max().or(*last_tick);
     beams.retain(|(_, born)| now - born < BEAM_SECONDS);
@@ -942,6 +1005,7 @@ fn draw_shots(
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_golems(
     mut commands: Commands,
+    mut bursts: MessageWriter<Burst>,
     sim: Res<Sim>,
     kit: Res<Kit>,
     fixed: Res<Time<Fixed>>,
@@ -982,6 +1046,14 @@ fn sync_golems(
         let to = world::pos_to_world(&sim.map, golem.pos);
         let hover = 1.5 + 0.12 * (t * 2.5 + golem.id as f32).sin();
         let transform = Transform::from_translation(from.lerp(to, alpha) + Vec3::Y * hover);
+        // En vol, petite flamme de réacteur sous le golem.
+        if golem.pos != golem.prev_pos && ((t * 12.0 + golem.id as f32) as u32).is_multiple_of(2) {
+            bursts.write(Burst::new(
+                transform.translation - Vec3::Y * 0.4,
+                Style::Flame,
+                1,
+            ));
+        }
         match views.golems.get(&golem.id) {
             Some(&entity) => {
                 if let Ok(mut current) = roots.get_mut(entity) {
@@ -1118,9 +1190,13 @@ fn sync_core_spire(
 /// Le Grand foreur : l'arbre tourne quand il a du combustible, l'anneau s'illumine avec
 /// l'avancement, et la Gemme Noire apparaît à l'extraction.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn animate_core_drill(
     sim: Res<Sim>,
     time: Res<Time>,
+    real_time: Res<Time<Real>>,
+    mut bursts: MessageWriter<Burst>,
+    mut next_dust: Local<f32>,
     mut shafts: Query<(&CoreShaft, &mut Transform), (Without<CoreRing>, Without<BlackGemView>)>,
     mut rings: Query<&mut Transform, (With<CoreRing>, Without<CoreShaft>, Without<BlackGemView>)>,
     mut gems: Query<
@@ -1129,11 +1205,17 @@ fn animate_core_drill(
     >,
 ) {
     for (shaft, mut transform) in &mut shafts {
-        if let Some(BuildingState::CoreDrill { fuel, .. }) =
-            sim.buildings.get(shaft.0).map(|b| &b.state)
+        if let Some(building) = sim.buildings.get(shaft.0)
+            && let BuildingState::CoreDrill { fuel, .. } = &building.state
             && *fuel > 0
         {
             transform.rotate_y(time.delta_secs() * 4.0);
+            // Le forage soulève de la poussière violette au pied du derrick.
+            if real_time.elapsed_secs() >= *next_dust {
+                *next_dust = real_time.elapsed_secs() + 0.2;
+                let at = world::pos_to_world(&sim.map, building.center()) + Vec3::Y * 0.4;
+                bursts.write(Burst::new(at, Style::Dust, 3));
+            }
         }
     }
     let progress = sim.drilling_percent() as f32 / 100.0;
@@ -1150,5 +1232,19 @@ fn animate_core_drill(
         };
         transform.rotate_y(time.delta_secs() * 0.8);
         transform.translation.y = 5.5 + 0.3 * (time.elapsed_secs() * 1.5).sin();
+    }
+}
+
+/// Les chevrons glissent le long des convoyeurs à la vitesse des objets transportés.
+fn animate_chevrons(
+    sim: Res<Sim>,
+    time: Res<Time>,
+    mut chevrons: Query<&mut Transform, With<Chevron>>,
+) {
+    let tiles_per_second =
+        gem_sim::TICKS_PER_SECOND as f32 / sim.config.bonuses.conveyor_ticks as f32;
+    let x = (time.elapsed_secs() * tiles_per_second).fract() - 0.5;
+    for mut transform in &mut chevrons {
+        transform.translation.x = x;
     }
 }

@@ -1,5 +1,6 @@
-//! Black Gem — prototype M5 : l'Arche (progression entre expéditions), expéditions de 15 min
-//! à plus d'une heure, forage du Cœur, usine, gemmes, tours, golems programmés en Python.
+//! Black Gem — prototype M6 : passe graphique (ciel, géante gazeuse, eau, particules,
+//! atterrissage), l'Arche, expéditions de 15 min à plus d'une heure, forage du Cœur, usine,
+//! gemmes, tours, golems programmés en Python.
 
 mod build;
 mod camera;
@@ -10,6 +11,7 @@ mod hud;
 mod i18n;
 mod mission;
 mod palette;
+mod particles;
 mod profile;
 mod sim;
 mod sky;
@@ -44,6 +46,7 @@ fn main() {
             editor::EditorPlugin,
             mission::MissionPlugin,
             profile::ProfilePlugin,
+            particles::ParticlesPlugin,
         ))
         .run();
 }

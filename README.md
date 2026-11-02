@@ -6,7 +6,21 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M5 — l'Arche
+## État actuel : prototype M6 — passe graphique
+
+- **Ciel** : dôme dégradé jour/nuit, **géante gazeuse** à bandes au-dessus de l'horizon, soleil
+  avec halo, **étoiles** la nuit.
+- **Eau** animée : vagues, reflets et effet de Fresnel (shader dédié, courbure comprise).
+- **Particules** : étincelles des foreuses et des impacts (couleur de la gemme), éclats de
+  Corruption à la mort des ennemis (gros éclats pour les boss), étincelles des fours,
+  poussière du Grand foreur, flammes des golems.
+- **Atterrissage** : la capsule descend du ciel au début de chaque expédition, caméra en
+  plan large qui se rapproche.
+- Relief ombré (creux et pentes), **chevrons animés** sur les convoyeurs (vitesse réelle des
+  objets), **grille de construction** autour du curseur.
+- Sur ordinateur : occlusion ambiante (SSAO) et anticrénelage FXAA.
+
+### L'Arche (M5)
 
 **L'Arche** est la station en orbite entre deux expéditions. Elle garde la progression
 (sauvegarde automatique : un fichier `BlackGem/profile.json` dans le dossier de données de

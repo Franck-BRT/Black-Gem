@@ -15,6 +15,7 @@ use bevy::{
 use crate::camera::RtsCamera;
 
 pub type CurvedMaterial = ExtendedMaterial<StandardMaterial, Curvature>;
+pub type WaterMaterial = ExtendedMaterial<StandardMaterial, Water>;
 
 /// Force maximale de la courbure : le sol descend de `k × distance²`.
 const MAX_CURVATURE: f32 = 0.0016;
@@ -36,6 +37,34 @@ impl MaterialExtension for Curvature {
     }
 }
 
+/// Eau : même courbure que le reste du monde, plus des vagues animées.
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+pub struct Water {
+    #[uniform(100)]
+    pub params: Vec4,
+    /// x : temps, en secondes.
+    #[uniform(101)]
+    pub wave: Vec4,
+}
+
+impl MaterialExtension for Water {
+    fn vertex_shader() -> ShaderRef {
+        "embedded://black_gem/shaders/curved_mesh.wesl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "embedded://black_gem/shaders/water.wesl".into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        "embedded://black_gem/shaders/curved_prepass.wesl".into()
+    }
+
+    fn deferred_fragment_shader() -> ShaderRef {
+        "embedded://black_gem/shaders/water.wesl".into()
+    }
+}
+
 /// Valeur courante de la courbure, partagée par tous les matériaux du monde.
 #[derive(Resource, Default)]
 pub struct CurrentCurvature {
@@ -48,7 +77,10 @@ impl Plugin for CurvaturePlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "shaders/curved_mesh.wesl");
         bevy::asset::embedded_asset!(app, "shaders/curved_prepass.wesl");
+        bevy::asset::embedded_asset!(app, "shaders/water.wesl");
         app.add_plugins(MaterialPlugin::<CurvedMaterial>::default())
+            .add_plugins(MaterialPlugin::<WaterMaterial>::default())
+            .add_systems(Update, animate_water)
             .init_resource::<CurrentCurvature>()
             .add_systems(PostUpdate, update_curvature);
     }
@@ -79,6 +111,18 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 pub fn bend(point: Vec3, params: Vec4) -> Vec3 {
     let d = point.xz() - params.xy();
     point - Vec3::Y * params.z * d.length_squared()
+}
+
+/// Les vagues avancent ; l'eau suit aussi la courbure courante.
+fn animate_water(
+    time: Res<Time>,
+    current: Res<CurrentCurvature>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+) {
+    for (_, material) in materials.iter_mut() {
+        material.extension.params = current.params;
+        material.extension.wave.x = time.elapsed_secs() % 3600.0;
+    }
 }
 
 fn update_curvature(
