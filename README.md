@@ -6,7 +6,39 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M7 et passe de confort
+## État actuel : prototype M8 — itérateurs, traits et travail d'équipe
+
+La suite de l'Acte II : le Rust du jeu gagne les outils des « machines lourdes ».
+
+- **Fermetures** `|x| …` (et `move`) : passées à un itérateur, ou rangées dans une variable
+  (`let double = |x| x * 2;`) et transmises à une fonction (`f: impl Fn(i64) -> i64`).
+- **Itérateurs** : `iter`, `into_iter`, `chars`, `a..b`, puis `map`, `filter`, `filter_map`,
+  `enumerate`, `rev`, `take`, `skip`, `take_while`, `skip_while`, `step_by`, `zip`, `copied`,
+  `inspect`, et `collect`, `sum`, `count`, `min`, `max`, `min_by_key`, `max_by_key`, `any`,
+  `all`, `find`, `position`, `fold`, `for_each`, `last`, `nth`. Comme en vrai Rust, ils sont
+  **paresseux** : `find` s'arrête au premier trouvé. Aussi `Option::map`, `and_then`,
+  `unwrap_or_else`, `map_or`, `filter`, `ok_or`, et `Vec::retain`, `sort_by_key`.
+- **Traits** : `trait Forme { fn aire(&self) -> i64; fn nom(&self) -> String { … } }`,
+  `impl Forme for Carre`, méthodes par défaut, fonctions génériques `fn f<T: Forme>(x: &T)` ou
+  `x: &impl Forme` (recopiées pour chaque type, comme le fait rustc), `T::nouveau()`, et
+  `impl fmt::Display` pour afficher ses types avec `{}`.
+- **Golems coordonnés** (Python et Rust) : `reserver(pos)` ne réussit que pour un golem à la
+  fois (un verrou, libéré à l'arrêt du programme), `liberer(pos)`, `reservee(pos)` ;
+  `envoyer(canal, n)` et `recevoir(canal)` pour se passer des messages ; `mon_numero()`,
+  `nb_golems()`. Nouveau modèle **Équipe** : plusieurs golems ravitaillent les tours sans
+  jamais servir la même.
+
+```rust
+let cible = tours()
+    .into_iter()
+    .filter(|&t| munitions(t) < 12 && !reservee(t))
+    .min_by_key(|&t| munitions(t));
+if let Some(tour) = cible {
+    if reserver(tour) { /* … livrer … */ liberer(tour); }
+}
+```
+
+## Passe de confort
 
 - **Les ennemis détruisent ce qui leur barre la route** : un convoyeur ou une tour sur leur
   chemin est attaqué jusqu'à sa destruction (la gemme d'une tour détruite revient dans
@@ -76,8 +108,8 @@ fn main() {
 - L'Arche a un **Grimoire** : les deux actes de l'apprentissage et les règles de l'ownership.
 
 Simplifications, signalées par des messages clairs : tous les entiers sont des `i64` ; une
-référence `&mut` se passe en argument mais ne se garde pas dans une variable ; pas encore de
-traits, de génériques ni de fermetures (`|x| …`).
+référence `&mut` se passe en argument mais ne se garde pas dans une variable ; pas de
+`dyn Trait` ni de structures génériques.
 
 ### Passe graphique (M6)
 

@@ -10,6 +10,16 @@ pub enum TypeExpr {
     Array(Box<TypeExpr>),
     /// `_` : à déduire.
     Infer,
+    /// `impl Trait` (ou `dyn Trait`) : un type qui respecte ces contraintes.
+    Impl(Vec<Bound>, bool),
+}
+
+/// Contrainte sur un type générique : un trait, ou une signature de fermeture.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Bound {
+    Trait(String),
+    /// `Fn(i64) -> bool` (et `FnMut`, `FnOnce`).
+    Fn(Vec<TypeExpr>, Option<Box<TypeExpr>>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +40,10 @@ pub struct Param {
 pub struct FnDecl {
     pub name: String,
     pub line: u32,
+    /// Paramètres de type : `<T: Trait>`.
+    pub generics: Vec<(String, Vec<Bound>)>,
+    /// Faux pour une méthode de trait sans corps par défaut.
+    pub has_body: bool,
     pub self_param: Option<(SelfKind, bool)>,
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,
@@ -59,6 +73,13 @@ pub enum Item {
     Enum(EnumDecl),
     Impl {
         type_name: String,
+        /// `impl Trait for Type`.
+        trait_name: Option<String>,
+        line: u32,
+        methods: Vec<FnDecl>,
+    },
+    Trait {
+        name: String,
         line: u32,
         methods: Vec<FnDecl>,
     },
@@ -197,6 +218,15 @@ pub enum ExprKind {
     Format(FmtMacro, String, Vec<Expr>),
     Assert(Box<Expr>, Option<Box<Expr>>),
     AssertEq(Box<Expr>, Box<Expr>, bool),
+    /// `|x, y| corps` (`move` : les valeurs capturées sont déplacées dans la fermeture).
+    Closure {
+        params: Vec<(Pat, Option<TypeExpr>)>,
+        ret: Option<TypeExpr>,
+        body: Box<Expr>,
+        is_move: bool,
+    },
+    /// `write!(f, "…", args)` dans `impl Display`.
+    Write(Box<Expr>, String, Vec<Expr>, bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]

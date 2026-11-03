@@ -17,6 +17,8 @@ pub enum Value {
     Range(i64, i64, i64),
     /// Fonction définie par `def` (indice dans le programme).
     Function(u32),
+    /// Fermeture (Rust) : fonction et valeurs capturées, passées avant les arguments.
+    Closure(u32, Vec<Value>),
 }
 
 impl Value {
@@ -30,6 +32,7 @@ impl Value {
             Value::Tuple(_) => "tuple",
             Value::Range(..) => "range",
             Value::Function(_) => "function",
+            Value::Closure(..) => "closure",
         }
     }
 
@@ -41,7 +44,7 @@ impl Value {
             Value::Str(s) => !s.is_empty(),
             Value::List(items) | Value::Tuple(items) => !items.is_empty(),
             Value::Range(start, stop, step) => range_len(*start, *stop, *step) > 0,
-            Value::Function(_) => true,
+            Value::Function(_) | Value::Closure(..) => true,
         }
     }
 
@@ -96,6 +99,7 @@ impl fmt::Display for Value {
             Value::Range(start, stop, 1) => write!(f, "range({start}, {stop})"),
             Value::Range(start, stop, step) => write!(f, "range({start}, {stop}, {step})"),
             Value::Function(_) => f.write_str("<fonction>"),
+            Value::Closure(..) => f.write_str("<fermeture>"),
         }
     }
 }

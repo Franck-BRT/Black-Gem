@@ -24,6 +24,8 @@ pub enum Ty {
     Iter(Box<Ty>),
     /// Structure, énumération ou type du jeu (indice dans [`Types::adts`]).
     Adt(usize),
+    /// Fermeture ou fonction : `impl Fn(A, B) -> R`.
+    Fn(Vec<Ty>, Box<Ty>),
     /// Type encore inconnu, à déduire.
     Var(u32),
 }
@@ -55,6 +57,8 @@ pub struct Adt {
     pub clone: bool,
     pub debug: bool,
     pub eq: bool,
+    /// `impl Display` écrit par le joueur : s'affiche avec `{}`.
+    pub display: bool,
 }
 
 #[derive(Default)]
@@ -95,6 +99,9 @@ impl Types {
             Ty::Tuple(items) => items.iter().any(|t| self.occurs(var, t)),
             Ty::Vec(t) | Ty::Option(t) | Ty::Iter(t) | Ty::Ref(_, t) => self.occurs(var, &t),
             Ty::Result(t, e) => self.occurs(var, &t) || self.occurs(var, &e),
+            Ty::Fn(params, ret) => {
+                params.iter().any(|p| self.occurs(var, p)) || self.occurs(var, &ret)
+            }
             _ => false,
         }
     }
@@ -120,6 +127,11 @@ impl Types {
             | (Ty::Iter(x), Ty::Iter(y)) => self.unify(x, y),
             (Ty::Result(x1, x2), Ty::Result(y1, y2)) => self.unify(x1, y1) && self.unify(x2, y2),
             (Ty::Ref(m1, x), Ty::Ref(m2, y)) => m1 == m2 && self.unify(x, y),
+            (Ty::Fn(p1, r1), Ty::Fn(p2, r2)) => {
+                p1.len() == p2.len()
+                    && p1.iter().zip(p2).all(|(a, b)| self.unify(a, b))
+                    && self.unify(r1, r2)
+            }
             _ => a == b,
         }
     }
@@ -148,6 +160,13 @@ impl Types {
             Ty::Ref(true, t) => format!("&mut {}", self.display(&t)),
             Ty::Ref(false, t) => format!("&{}", self.display(&t)),
             Ty::Adt(i) => self.adts[i].name.clone(),
+            Ty::Fn(params, ret) => {
+                let inner: Vec<String> = params.iter().map(|t| self.display(t)).collect();
+                match self.shallow(&ret) {
+                    Ty::Unit => format!("impl Fn({})", inner.join(", ")),
+                    r => format!("impl Fn({}) -> {}", inner.join(", "), self.display(&r)),
+                }
+            }
             Ty::Var(_) => "_".into(),
         }
     }
@@ -158,7 +177,7 @@ impl Types {
         match self.shallow(ty) {
             Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Range | Ty::Var(_) => true,
             // `&mut T` n'est pas Copy en Rust, mais il est « ré-emprunté » à chaque usage.
-            Ty::Ref(..) => true,
+            Ty::Ref(..) | Ty::Fn(..) => true,
             Ty::Tuple(items) => items.iter().all(|t| self.is_copy(t)),
             Ty::Option(t) => self.is_copy(&t),
             Ty::Result(t, e) => self.is_copy(&t) && self.is_copy(&e),
@@ -185,16 +204,17 @@ impl Types {
             Ty::Tuple(items) => items.iter().all(|t| self.has_debug(t)),
             Ty::Result(t, e) => self.has_debug(&t) && self.has_debug(&e),
             Ty::Adt(i) => self.adts[i].debug,
-            Ty::Iter(_) => false,
+            Ty::Iter(_) | Ty::Fn(..) => false,
             _ => true,
         }
     }
 
     pub fn has_display(&self, ty: &Ty) -> bool {
-        matches!(
-            self.strip(ty),
-            Ty::Int | Ty::Bool | Ty::Str | Ty::String | Ty::Var(_) | Ty::Never
-        )
+        match self.strip(ty) {
+            Ty::Int | Ty::Bool | Ty::Str | Ty::String | Ty::Var(_) | Ty::Never => true,
+            Ty::Adt(i) => self.adts[i].display,
+            _ => false,
+        }
     }
 
     pub fn has_eq(&self, ty: &Ty) -> bool {
@@ -203,7 +223,7 @@ impl Types {
             Ty::Tuple(items) => items.iter().all(|t| self.has_eq(t)),
             Ty::Result(t, e) => self.has_eq(&t) && self.has_eq(&e),
             Ty::Adt(i) => self.adts[i].eq,
-            Ty::Iter(_) | Ty::Range => false,
+            Ty::Iter(_) | Ty::Range | Ty::Fn(..) => false,
             _ => true,
         }
     }
@@ -225,7 +245,7 @@ impl Types {
             Ty::Str | Ty::String => s("s"),
             Ty::Unit => s("u"),
             Ty::Range => s("range"),
-            Ty::Never | Ty::Var(_) => s("?"),
+            Ty::Never | Ty::Var(_) | Ty::Fn(..) => s("?"),
             Ty::Ref(_, t) => d(&t),
             Ty::Tuple(items) => {
                 let mut parts = vec![s("t")];

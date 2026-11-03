@@ -227,12 +227,17 @@ impl Parser {
             Tok::Keyword("impl") => {
                 self.advance();
                 self.no_generics()?;
-                let type_name = self.ident()?;
-                if self.is_keyword("for") {
+                let mut type_name = self.path_name()?;
+                let mut trait_name = None;
+                if self.eat_keyword("for") {
+                    trait_name = Some(type_name);
+                    type_name = self.path_name()?;
+                }
+                if self.is_punct("<") {
                     return Err(unsupported(
-                        line,
-                        "les traits (impl Trait for Type)",
-                        "traits (impl Trait for Type)",
+                        self.line(),
+                        "impl pour un type générique",
+                        "impl for a generic type",
                     ));
                 }
                 self.expect_punct("{")?;
@@ -249,6 +254,7 @@ impl Parser {
                 }
                 Ok(Some(Item::Impl {
                     type_name,
+                    trait_name,
                     line,
                     methods,
                 }))
@@ -285,7 +291,36 @@ impl Parser {
                 }
                 Ok(None)
             }
-            Tok::Keyword("trait") => Err(unsupported(line, "les traits", "traits")),
+            Tok::Keyword("trait") => {
+                self.advance();
+                let name = self.ident()?;
+                self.no_generics()?;
+                if self.is_punct(":") {
+                    return Err(unsupported(
+                        self.line(),
+                        "les super-traits (trait A: B)",
+                        "supertraits (trait A: B)",
+                    ));
+                }
+                self.expect_punct("{")?;
+                let mut methods = Vec::new();
+                while !self.eat_punct("}") {
+                    self.eat_keyword("pub");
+                    if !self.is_keyword("fn") {
+                        return Err(unsupported(
+                            self.line(),
+                            "dans un trait, autre chose que des fonctions (types, constantes)",
+                            "inside a trait, anything other than functions (types, constants)",
+                        ));
+                    }
+                    methods.push(self.function(true)?);
+                }
+                Ok(Some(Item::Trait {
+                    name,
+                    line,
+                    methods,
+                }))
+            }
             Tok::Keyword("mod") => Err(unsupported(line, "les modules", "modules")),
             Tok::Keyword("let") | Tok::Ident(_) | Tok::Macro(_) => Err(ScriptError::new(
                 line,
@@ -329,11 +364,88 @@ impl Parser {
         Ok(())
     }
 
+    /// `std::fmt::Display` → `Display`.
+    fn path_name(&mut self) -> Result<String, ScriptError> {
+        let mut name = self.ident()?;
+        while self.eat_punct("::") {
+            name = self.ident()?;
+        }
+        Ok(name)
+    }
+
+    /// Une contrainte : `Trait`, `std::fmt::Display`, `Fn(i64) -> bool`.
+    fn bound(&mut self) -> Result<Option<Bound>, ScriptError> {
+        if matches!(self.peek(), Tok::Lifetime(_)) {
+            self.advance();
+            return Ok(None);
+        }
+        if self.eat_punct("?") {
+            self.ident()?;
+            return Ok(None);
+        }
+        let name = self.path_name()?;
+        if matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce") && self.eat_punct("(") {
+            let mut params = Vec::new();
+            while !self.eat_punct(")") {
+                params.push(self.type_expr()?);
+                if !self.eat_punct(",") {
+                    self.expect_punct(")")?;
+                    break;
+                }
+            }
+            let ret = if self.eat_punct("->") {
+                Some(Box::new(self.type_expr()?))
+            } else {
+                None
+            };
+            return Ok(Some(Bound::Fn(params, ret)));
+        }
+        if self.eat_punct("<") {
+            while !self.eat_punct(">") {
+                self.type_expr()?;
+                if !self.eat_punct(",") {
+                    self.expect_punct(">")?;
+                    break;
+                }
+            }
+        }
+        Ok(Some(Bound::Trait(name)))
+    }
+
+    fn bounds(&mut self) -> Result<Vec<Bound>, ScriptError> {
+        let mut bounds = Vec::new();
+        loop {
+            bounds.extend(self.bound()?);
+            if !self.eat_punct("+") {
+                return Ok(bounds);
+            }
+        }
+    }
+
     fn function(&mut self, in_impl: bool) -> Result<FnDecl, ScriptError> {
         let line = self.line();
         self.advance(); // fn
         let name = self.ident()?;
-        self.no_generics()?;
+        let mut generics: Vec<(String, Vec<Bound>)> = Vec::new();
+        if self.eat_punct("<") {
+            while !self.eat_punct(">") {
+                if matches!(self.peek(), Tok::Lifetime(_)) {
+                    self.advance();
+                } else {
+                    let generic = self.ident()?;
+                    let bounds = if self.eat_punct(":") {
+                        self.bounds()?
+                    } else {
+                        Vec::new()
+                    };
+                    generics.push((generic, bounds));
+                }
+                if !self.eat_punct(",") {
+                    self.expect_punct(">")?;
+                    break;
+                }
+            }
+        }
         self.expect_punct("(")?;
         let mut self_param = None;
         let mut params = Vec::new();
@@ -400,17 +512,40 @@ impl Parser {
         } else {
             None
         };
-        if self.is_keyword("where") {
-            return Err(unsupported(
-                self.line(),
-                "les clauses where",
-                "where clauses",
-            ));
+        if self.eat_keyword("where") {
+            while !self.is_punct("{") && !self.is_punct(";") {
+                let generic = self.ident()?;
+                self.expect_punct(":")?;
+                let bounds = self.bounds()?;
+                match generics.iter_mut().find(|(g, _)| *g == generic) {
+                    Some((_, existing)) => existing.extend(bounds),
+                    None => generics.push((generic, bounds)),
+                }
+                if !self.eat_punct(",") {
+                    break;
+                }
+            }
         }
-        let body = self.block()?;
+        // Méthode de trait sans corps par défaut.
+        let (body, has_body) = if self.eat_punct(";") {
+            let at = self.prev_line();
+            (
+                Block {
+                    stmts: Vec::new(),
+                    tail: None,
+                    line: at,
+                    end_line: at,
+                },
+                false,
+            )
+        } else {
+            (self.block()?, true)
+        };
         Ok(FnDecl {
             name,
             line,
+            generics,
+            has_body,
             self_param,
             params,
             ret,
@@ -485,11 +620,10 @@ impl Parser {
                 "les durées de vie dans les types ('a)",
                 "lifetimes in types ('a)",
             )),
-            Tok::Keyword("impl") | Tok::Keyword("dyn") => Err(unsupported(
-                line,
-                "les types impl Trait / dyn Trait",
-                "impl Trait / dyn Trait types",
-            )),
+            Tok::Keyword("impl") | Tok::Keyword("dyn") => {
+                let dynamic = self.advance() == Tok::Keyword("dyn");
+                Ok(TypeExpr::Impl(self.bounds()?, dynamic))
+            }
             Tok::Punct("!") => {
                 self.advance();
                 Ok(TypeExpr::Path("!".into(), Vec::new()))
@@ -1010,7 +1144,44 @@ impl Parser {
                 ));
             }
             Tok::Punct("|") | Tok::Punct("||") | Tok::Keyword("move") => {
-                return Err(unsupported(line, "les fermetures |x| …", "closures |x| …"));
+                let is_move = self.eat_keyword("move");
+                let mut params = Vec::new();
+                if !self.eat_punct("||") {
+                    self.expect_punct("|")?;
+                    while !self.eat_punct("|") {
+                        let pat = self.single_pattern()?;
+                        let ty = if self.eat_punct(":") {
+                            Some(self.type_expr()?)
+                        } else {
+                            None
+                        };
+                        params.push((pat, ty));
+                        if !self.eat_punct(",") {
+                            self.expect_punct("|")?;
+                            break;
+                        }
+                    }
+                }
+                let ret = if self.eat_punct("->") {
+                    Some(self.type_expr()?)
+                } else {
+                    None
+                };
+                let body = if ret.is_some() {
+                    let block_line = self.line();
+                    Expr {
+                        kind: ExprKind::Block(self.block()?),
+                        line: block_line,
+                    }
+                } else {
+                    self.expr()?
+                };
+                ExprKind::Closure {
+                    params,
+                    ret,
+                    body: Box::new(body),
+                    is_move,
+                }
             }
             _ => return Err(self.unexpected()),
         };
@@ -1174,6 +1345,23 @@ impl Parser {
             ExprKind::Format(kind, template, args)
         } else {
             match name {
+                "write" | "writeln" => {
+                    let target = self.expr()?;
+                    self.expect_punct(",")?;
+                    let template = match self.advance() {
+                        Tok::Str(s) => s,
+                        _ => return Err(self.error(ErrorKind::Expected("\"…\""))),
+                    };
+                    let mut args = Vec::new();
+                    while self.eat_punct(",") {
+                        if self.is_punct(close) {
+                            break;
+                        }
+                        args.push(self.expr()?);
+                    }
+                    self.expect_punct(close)?;
+                    ExprKind::Write(Box::new(target), template, args, name == "writeln")
+                }
                 "vec" => self.array_items(close)?,
                 "assert" => {
                     let condition = self.expr()?;
@@ -1289,6 +1477,11 @@ impl Parser {
                 self.advance();
                 self.eat_keyword("mut");
                 Ok(Pat::Ref(Box::new(self.single_pattern()?)))
+            }
+            Tok::Punct("&&") => {
+                self.advance();
+                let inner = Pat::Ref(Box::new(self.single_pattern()?));
+                Ok(Pat::Ref(Box::new(inner)))
             }
             Tok::Punct("(") => {
                 self.advance();

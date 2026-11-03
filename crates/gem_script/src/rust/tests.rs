@@ -708,3 +708,253 @@ fn error_messages_are_helpful() {
         "Line 3: cannot borrow 'v' as mutable (&mut): declare it with let mut v [E0596]"
     );
 }
+
+#[test]
+fn iterators_and_closures() {
+    let source = r#"
+fn main() {
+    let v = vec![5, 1, 4, 2, 8];
+    let doubles: Vec<i64> = v.iter().map(|x| x * 2).collect();
+    let pairs = v.iter().filter(|&&x| x % 2 == 0).count();
+    let total: i64 = v.iter().sum();
+    println!("{:?} {} {}", doubles, pairs, total);
+    let grand = v.iter().copied().filter(|x| *x > 3).max();
+    let premier = v.iter().position(|&x| x == 4);
+    let trouve = v.iter().find(|x| **x > 4);
+    println!("{:?} {:?} {:?}", grand, premier, trouve);
+    let somme = (1..=4).fold(0, |acc, x| acc + x * x);
+    let tous = v.iter().all(|&x| x > 0);
+    let un = v.iter().any(|&x| x > 7);
+    println!("{somme} {tous} {un}");
+    for (i, x) in v.iter().enumerate().skip(1).take(2) {
+        print!("{i}={x}");
+    }
+    let mut compteur = 0;
+    v.iter().for_each(|x| compteur += x);
+    println!("compteur {compteur}");
+    let decalage = 10;
+    let ajouter = |x: i64| x + decalage;
+    println!("{} {}", ajouter(1), ajouter(5));
+    let noms = vec!["rouge", "vert"];
+    let couples: Vec<(i64, &str)> = (1..10).zip(noms.iter().copied()).collect();
+    println!("{:?}", couples);
+    let inverses: Vec<i64> = (0..5).rev().filter(|x| x % 2 == 0).collect();
+    println!("{:?} {:?}", inverses, v.iter().min_by_key(|x| (**x - 4).abs()));
+    let mut w = vec![3, 1, 2, 7, 6];
+    w.retain(|&x| x != 7);
+    w.sort_by_key(|x| -x);
+    println!("{:?}", w);
+    let texte = "golem";
+    let n = texte.chars().filter(|c| *c == "o").count();
+    println!("{n} {:?}", texte.chars().rev().collect::<Vec<&str>>());
+}
+"#;
+    assert_eq!(
+        output(source),
+        "[10, 2, 8, 4, 16] 3 20\nSome(8) Some(2) Some(5)\n30 true true\n1=1\n2=4\ncompteur 20\n11 15\n[(1, \"rouge\"), (2, \"vert\")]\n[4, 2, 0] Some(4)\n[6, 3, 2, 1]\n1 [\"m\", \"e\", \"l\", \"o\", \"g\"]"
+    );
+}
+
+#[test]
+fn option_closures_and_lazy_iterators() {
+    let source = r#"
+fn main() {
+    let o: Option<i64> = Some(3);
+    let rien: Option<i64> = None;
+    println!("{:?} {:?}", o.map(|x| x * 10), rien.map(|x| x * 10));
+    println!("{} {}", rien.unwrap_or_else(|| 7), o.map_or(0, |x| x + 1));
+    println!("{:?} {}", o.filter(|x| *x > 5), o.is_some_and(|x| x == 3));
+    println!("{:?}", rien.ok_or("vide"));
+    // find s'arrête au premier trouvé : la fermeture ne voit pas tous les éléments.
+    let mut vus = 0;
+    let premier = (1..100).inspect(|_| vus += 1).find(|x| x % 7 == 0);
+    println!("{:?} {vus}", premier);
+}
+"#;
+    assert_eq!(
+        output(source),
+        "Some(30) None\n7 4\nNone true\nErr(\"vide\")\nSome(7) 7"
+    );
+}
+
+#[test]
+fn traits_generics_and_display() {
+    let source = r#"
+use std::fmt;
+
+trait Forme {
+    fn aire(&self) -> i64;
+    fn nom(&self) -> String {
+        String::from("forme")
+    }
+    fn decrire(&self) -> String {
+        format!("{} d'aire {}", self.nom(), self.aire())
+    }
+}
+
+struct Carre {
+    cote: i64,
+}
+
+struct Rect {
+    l: i64,
+    h: i64,
+}
+
+impl Forme for Carre {
+    fn aire(&self) -> i64 {
+        self.cote * self.cote
+    }
+    fn nom(&self) -> String {
+        "carré".to_string()
+    }
+}
+
+impl Forme for Rect {
+    fn aire(&self) -> i64 {
+        self.l * self.h
+    }
+}
+
+impl fmt::Display for Rect {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}×{}", self.l, self.h)
+    }
+}
+
+fn plus_grande<T: Forme>(a: &T, b: &T) -> i64 {
+    a.aire().max(b.aire())
+}
+
+fn resume(x: &impl Forme) -> String {
+    x.decrire()
+}
+
+fn appliquer<F: Fn(i64) -> i64>(f: F, x: i64) -> i64 {
+    f(f(x))
+}
+
+fn premier<T: Copy>(v: &Vec<T>) -> T {
+    v[0]
+}
+
+fn main() {
+    let c = Carre { cote: 3 };
+    let r = Rect { l: 2, h: 5 };
+    println!("{} / {}", resume(&c), resume(&r));
+    println!("{} {}", plus_grande(&c, &Carre { cote: 4 }), plus_grande(&r, &r));
+    println!("{r} {}", r.to_string().len());
+    let triple = |x| x * 3;
+    println!("{} {}", appliquer(triple, 2), appliquer(|x| x + 1, 0));
+    println!("{} {}", premier(&vec![7, 8]), premier(&vec!["a"]));
+}
+"#;
+    assert_eq!(
+        output(source),
+        "carré d'aire 9 / forme d'aire 10\n16 10\n2×5 3\n18 2\n7 a"
+    );
+}
+
+#[test]
+fn m8_errors() {
+    // Une fermeture rangée dans une variable ne peut pas modifier ce qu'elle capture.
+    assert_eq!(
+        code("fn main() {\n    let mut n = 0;\n    let f = |x: i64| n += x;\n    f(1);\n}"),
+        ""
+    );
+    // move déplace la valeur dans la fermeture.
+    assert_eq!(
+        code(
+            "fn main() {\n    let v = vec![1];\n    let f = move || v.len();\n    println!(\"{:?}\", v);\n}"
+        ),
+        "E0382"
+    );
+    assert_eq!(
+        code("trait T { fn a(&self) -> i64; }\nstruct S;\nimpl T for S {}\nfn main() {}"),
+        "E0046"
+    );
+    assert_eq!(
+        code(
+            "trait T { fn a(&self) -> i64; }\nstruct S;\nfn f<X: T>(x: &X) -> i64 { x.a() }\nfn main() {\n    f(&S);\n}"
+        ),
+        "E0277"
+    );
+    assert_eq!(
+        code("fn main() {\n    let v = vec![1];\n    let s: i64 = v.map(|x| x).sum();\n}"),
+        "E0599"
+    );
+    assert_eq!(
+        code(
+            "fn main() {\n    let v = vec![1];\n    let w: Vec<i64> = v.iter().map(|x| { return x; }).collect();\n}"
+        ),
+        ""
+    );
+    assert_eq!(
+        code("struct P;\nfn main() {\n    println!(\"{}\", P);\n}"),
+        "E0277"
+    );
+}
+
+#[test]
+fn nested_iterators_and_generic_chains() {
+    let source = r#"
+trait Neuf {
+    fn neuf() -> Self;
+    fn valeur(&self) -> i64;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Jeton {
+    n: i64,
+}
+
+impl Neuf for Jeton {
+    fn neuf() -> Self {
+        Jeton { n: 42 }
+    }
+    fn valeur(&self) -> i64 {
+        self.n
+    }
+}
+
+fn fabriquer<T: Neuf>() -> T {
+    T::neuf()
+}
+
+fn doubler<T: Neuf>(x: &T) -> i64 {
+    somme(&vec![x.valeur(), x.valeur()])
+}
+
+fn somme(v: &Vec<i64>) -> i64 {
+    v.iter().sum()
+}
+
+fn compter_au_dessus(v: &Vec<i64>, seuil: i64) -> usize {
+    v.iter().filter(|&&x| x > seuil).count()
+}
+
+fn main() {
+    let j: Jeton = fabriquer();
+    println!("{:?} {}", j, doubler(&j));
+    let a = vec![1, 2, 3];
+    let b = vec![2, 3, 4];
+    let communs: Vec<i64> = a.iter().copied().filter(|x| b.iter().any(|y| y == x)).collect();
+    println!("{:?} {}", communs, compter_au_dessus(&b, 2));
+    let grille: Vec<Vec<i64>> = (0..3).map(|i| (0..3).map(|k| i * 3 + k).collect()).collect();
+    let diag: i64 = grille.iter().enumerate().map(|(i, ligne)| ligne[i]).sum();
+    println!("{:?} {diag}", grille[2]);
+    let mut total = 0;
+    for x in a.iter().map(|x| x * 100).take(2) {
+        if x > 150 {
+            break;
+        }
+        total += x;
+    }
+    println!("{total}");
+}
+"#;
+    assert_eq!(
+        output(source),
+        "Jeton { n: 42 } 84\n[2, 3] 2\n[6, 7, 8] 12\n100"
+    );
+}

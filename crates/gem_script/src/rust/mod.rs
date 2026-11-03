@@ -7,7 +7,8 @@
 //!
 //! Simplifications (documentées pour le joueur) : tous les entiers sont des `i64` ; une
 //! référence `&mut` ne peut pas être gardée dans une variable (elle se passe en argument) ;
-//! pas encore de traits, de génériques ni de fermetures.
+//! une fermeture rangée dans une variable garde une copie de ce qu'elle capture ; pas de
+//! `dyn Trait`, de structures génériques ni de durées de vie explicites.
 
 mod ast;
 mod lexer;

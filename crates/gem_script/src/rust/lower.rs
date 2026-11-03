@@ -10,7 +10,7 @@
 //! - `fn main` devient le programme principal (ses variables s'affichent dans l'inspecteur).
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, VecDeque},
     mem,
 };
 
@@ -26,6 +26,10 @@ use crate::{
     error::{ErrorKind, ScriptError, edit_distance},
     value::Value,
 };
+
+mod closures;
+mod iter;
+mod traits;
 
 type R<T> = Result<T, ScriptError>;
 type CExpr = c::Expr;
@@ -118,6 +122,8 @@ struct Local {
     slot: String,
     ty: Ty,
     mutable: bool,
+    /// Valeur capturée par une fermeture rangée dans une variable (copie en lecture seule).
+    capture: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +218,9 @@ struct FnState {
     loops: Vec<LoopCtx>,
     /// Paramètres `&mut` : renvoyés avec le résultat.
     mut_params: Vec<String>,
+    /// Dans une fermeture recopiée sur place (`.map(|x| …)`) : nombre de boucles ouvertes
+    /// à son début (`break` / `continue` / `return` ne peuvent pas en sortir).
+    inline_base: Option<usize>,
 }
 
 impl FnState {
@@ -224,6 +233,7 @@ impl FnState {
             flow: Flow::new(),
             loops: Vec::new(),
             mut_params: Vec::new(),
+            inline_base: None,
         }
     }
 }
@@ -282,6 +292,20 @@ struct Lowerer<'a> {
     temps: u32,
     global_types: HashMap<String, Ty>,
     self_ty: Option<Ty>,
+    /// Types génériques en cours de remplacement (`T` → `Point`).
+    generics: HashMap<String, Ty>,
+    /// Fonctions génériques : recopiées pour chaque type d'appel.
+    generic_decls: HashMap<String, FnDecl>,
+    /// Copies à fabriquer : (nom caché, déclaration, types des paramètres génériques).
+    instances: Vec<traits::Instance>,
+    /// Traits du joueur : leurs méthodes (avec corps par défaut éventuel).
+    traits: HashMap<String, Vec<FnDecl>>,
+    /// Implémentations : (trait, type).
+    impls: BTreeSet<(String, usize)>,
+    /// Pendant la lecture de la signature d'une fonction générique : les `impl Trait`.
+    anonymous: Option<Vec<(Ty, Vec<Bound>)>>,
+    /// Pendant la fabrication d'une copie : les types des `impl Trait`, dans l'ordre.
+    fill: Option<VecDeque<Ty>>,
 }
 
 pub fn lower(items: &[Item], api: &RustApi) -> R<Program> {
@@ -296,6 +320,13 @@ pub fn lower(items: &[Item], api: &RustApi) -> R<Program> {
         temps: 0,
         global_types: HashMap::new(),
         self_ty: None,
+        generics: HashMap::new(),
+        generic_decls: HashMap::new(),
+        instances: Vec::new(),
+        traits: HashMap::new(),
+        impls: BTreeSet::new(),
+        anonymous: None,
+        fill: None,
     };
     for (i, function) in api.functions.iter().enumerate() {
         for name in &function.names {
@@ -304,6 +335,7 @@ pub fn lower(items: &[Item], api: &RustApi) -> R<Program> {
     }
     l.declare_game_types();
     l.declare_types(items)?;
+    l.declare_traits(items)?;
     l.declare_functions(items)?;
 
     let mut program = Vec::new();
@@ -341,6 +373,7 @@ pub fn lower(items: &[Item], api: &RustApi) -> R<Program> {
     for item in items {
         match item {
             Item::Fn(decl) if decl.name == "main" => main = Some(decl),
+            Item::Fn(decl) if l.generic_decls.contains_key(&decl.name) => {}
             Item::Fn(decl) => {
                 let sig = l.fns[&decl.name].clone();
                 l.self_ty = None;
@@ -348,11 +381,15 @@ pub fn lower(items: &[Item], api: &RustApi) -> R<Program> {
                 program.push(def);
             }
             Item::Impl {
-                type_name, methods, ..
+                type_name,
+                trait_name,
+                methods,
+                ..
             } => {
                 let ty = l.type_names[type_name].clone();
                 let Ty::Adt(adt) = ty else { unreachable!() };
-                for decl in methods {
+                let methods = l.impl_methods(trait_name.as_deref(), methods);
+                for decl in &methods {
                     let sig = l.fns[&format!("{adt}::{}", decl.name)].clone();
                     l.self_ty = Some(ty.clone());
                     let def = l.function(decl, &sig)?;
@@ -383,6 +420,8 @@ pub fn lower(items: &[Item], api: &RustApi) -> R<Program> {
     let mut body = Vec::new();
     let (_, ty) = l.block(&main.body, &mut body)?;
     l.expect(&Ty::Unit, &ty, main.body.end_line)?;
+    // Les fonctions génériques, recopiées pour chaque type (comme le fait rustc).
+    program.extend(l.instantiate_all()?);
     program.extend(body);
 
     let mut compiled = compiler::compile(&program, &Api::default())?;
@@ -415,6 +454,7 @@ impl Lowerer<'_> {
                 clone: true,
                 debug: true,
                 eq: true,
+                display: false,
             });
             for name in &game_enum.names {
                 self.type_names.insert(name.to_string(), Ty::Adt(index));
@@ -430,6 +470,7 @@ impl Lowerer<'_> {
                 clone: false,
                 debug: true,
                 eq: false,
+                display: false,
             });
             for name in &opaque.names {
                 self.type_names.insert(name.to_string(), Ty::Adt(index));
@@ -502,6 +543,7 @@ impl Lowerer<'_> {
                 clone: has("Clone"),
                 debug: has("Debug"),
                 eq: has("PartialEq"),
+                display: false,
             });
             if has("Copy") && !has("Clone") {
                 return Err(rerr(
@@ -690,6 +732,21 @@ impl Lowerer<'_> {
     fn declare_functions(&mut self, items: &[Item]) -> R<()> {
         for item in items {
             match item {
+                Item::Fn(decl) if Self::is_generic(decl) => {
+                    if self.fns.contains_key(&decl.name)
+                        || self
+                            .generic_decls
+                            .insert(decl.name.clone(), decl.clone())
+                            .is_some()
+                    {
+                        return Err(rerr(
+                            decl.line,
+                            "E0428",
+                            format!("la fonction « {} » est définie deux fois", decl.name),
+                            format!("the function '{}' is defined twice", decl.name),
+                        ));
+                    }
+                }
                 Item::Fn(decl) => {
                     self.self_ty = None;
                     let sig =
@@ -705,6 +762,7 @@ impl Lowerer<'_> {
                 }
                 Item::Impl {
                     type_name,
+                    trait_name,
                     line,
                     methods,
                 } => {
@@ -737,7 +795,17 @@ impl Lowerer<'_> {
                         ));
                     }
                     self.self_ty = Some(ty.clone());
-                    for decl in methods {
+                    if let Some(t) = trait_name {
+                        self.check_impl(t, adt, methods, *line)?;
+                    }
+                    for decl in &self.impl_methods(trait_name.as_deref(), methods) {
+                        if Self::is_generic(decl) {
+                            return Err(unsupported(
+                                decl.line,
+                                "les méthodes génériques (le type peut l'être via un trait)",
+                                "generic methods (use a trait instead)",
+                            ));
+                        }
                         let key = format!("{adt}::{}", decl.name);
                         let sig = self.signature(
                             decl,
@@ -787,9 +855,14 @@ impl Lowerer<'_> {
                         None => Ok(l.types.fresh()),
                     }
                 };
+                if let Some(t) = self.generics.get(type_name) {
+                    return Ok(t.clone());
+                }
                 match type_name.as_str() {
                     "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
                     | "u64" | "u128" | "usize" => Ty::Int,
+                    // `fmt::Formatter` (dans `impl Display`) : le texte en cours d'écriture.
+                    "Formatter" => Ty::String,
                     "bool" => Ty::Bool,
                     "str" | "char" => Ty::Str,
                     "String" => Ty::String,
@@ -835,6 +908,7 @@ impl Lowerer<'_> {
             ),
             TypeExpr::Array(inner) => Ty::Vec(Box::new(self.ty(inner, line)?)),
             TypeExpr::Infer => self.types.fresh(),
+            TypeExpr::Impl(bounds, dynamic) => self.impl_type(bounds, *dynamic, line)?,
         })
     }
 
@@ -977,6 +1051,7 @@ impl Lowerer<'_> {
             slot: slot.clone(),
             ty: ty.clone(),
             mutable,
+            capture: false,
         });
         let id = self.f.locals.len() - 1;
         self.f.scopes.last_mut().unwrap().push(id);
@@ -1150,6 +1225,20 @@ impl Lowerer<'_> {
 
     fn check_mutable(&self, place: &Place, line: u32, borrow: bool) -> R<()> {
         let local = &self.f.locals[place.local];
+        if local.capture {
+            return Err(rerr(
+                line,
+                "",
+                format!(
+                    "cette fermeture ne peut pas modifier « {0} » : elle n'en garde qu'une copie. Passe-la directement à l'itérateur (.for_each(|x| …)) ou utilise une boucle for",
+                    local.name
+                ),
+                format!(
+                    "this closure cannot modify '{0}': it only keeps a copy. Pass it directly to the iterator (.for_each(|x| …)) or use a for loop",
+                    local.name
+                ),
+            ));
+        }
         match place.through {
             Some(true) => return Ok(()),
             Some(false) => {
@@ -2629,6 +2718,16 @@ impl Lowerer<'_> {
             }
             ExprKind::For(pat, iterable, body) => self.for_loop(pat, iterable, body, line, out),
             ExprKind::Break(value) => {
+                if let Some(base) = self.f.inline_base
+                    && self.f.loops.len() <= base
+                {
+                    return Err(rerr(
+                        line,
+                        "E0267",
+                        "« break » ne peut pas sortir d'une fermeture |x| … (elle s'arrête à sa dernière expression)",
+                        "'break' cannot leave a closure |x| … (it ends with its last expression)",
+                    ));
+                }
                 let Some(ctx) = self.f.loops.last() else {
                     return Err(rerr(
                         line,
@@ -2675,6 +2774,16 @@ impl Lowerer<'_> {
                 Ok((unit(), Ty::Never))
             }
             ExprKind::Continue => {
+                if let Some(base) = self.f.inline_base
+                    && self.f.loops.len() <= base
+                {
+                    return Err(rerr(
+                        line,
+                        "E0267",
+                        "« continue » ne peut pas sortir d'une fermeture |x| … (elle s'arrête à sa dernière expression)",
+                        "'continue' cannot leave a closure |x| … (it ends with its last expression)",
+                    ));
+                }
                 let Some(ctx) = self.f.loops.last() else {
                     return Err(rerr(
                         line,
@@ -2693,6 +2802,14 @@ impl Lowerer<'_> {
                 Ok((unit(), Ty::Never))
             }
             ExprKind::Return(value) => {
+                if self.f.inline_base.is_some() {
+                    return Err(rerr(
+                        line,
+                        "",
+                        "« return » dans une fermeture passée à un itérateur : la fermeture vaut sa dernière expression (enlève return)",
+                        "'return' in a closure given to an iterator: the closure is worth its last expression (remove return)",
+                    ));
+                }
                 let (v, t) = match value {
                     Some(value) => self.value(value, out)?,
                     None => (unit(), Ty::Unit),
@@ -2717,6 +2834,40 @@ impl Lowerer<'_> {
                 self.return_stmts(v, line, out);
                 self.f.flow = Flow::unreachable();
                 Ok((unit(), Ty::Never))
+            }
+            ExprKind::Closure {
+                params,
+                ret,
+                body,
+                is_move,
+            } => self.lambda(params, ret.as_ref(), body, *is_move, line),
+            ExprKind::Write(target, template, args, newline) => {
+                let (mut text, _) =
+                    self.format_macro(FmtMacro::Format, template, args, line, out)?;
+                if *newline {
+                    text = bin(CBin::Add, text, CExpr::Str("\n".into()));
+                }
+                let Some(mut place) = self.place(target, out)? else {
+                    return Err(rerr(
+                        line,
+                        "",
+                        "write! écrit dans le paramètre f: &mut fmt::Formatter",
+                        "write! writes into the parameter f: &mut fmt::Formatter",
+                    ));
+                };
+                self.check_use(&place, line)?;
+                self.auto_deref(&mut place);
+                self.check_mutable(&place, line, true)?;
+                if !matches!(self.types.strip(&place.ty), Ty::String) {
+                    return Err(self.mismatch(&Ty::String, &place.ty, line));
+                }
+                let current = self.place_expr(&place);
+                self.store(&place, bin(CBin::Add, current, text), line, out);
+                let err = self.types.fresh();
+                Ok((
+                    CExpr::Tuple(vec![CExpr::Bool(true), unit()]),
+                    Ty::Result(Box::new(Ty::Unit), Box::new(err)),
+                ))
             }
             ExprKind::Format(kind, template, args) => {
                 self.format_macro(*kind, template, args, line, out)
@@ -2804,6 +2955,21 @@ impl Lowerer<'_> {
             if var == "None" {
                 let inner = self.types.fresh();
                 return Ok((CExpr::None, Ty::Option(Box::new(inner))));
+            }
+            if let Some(sig) = self.fns.get(var)
+                && !sig.has_mut
+            {
+                // Une fonction utilisée comme valeur (passée à .map(…), par exemple).
+                return Ok((
+                    name(&sig.slot),
+                    Ty::Fn(sig.params.clone(), Box::new(sig.ret.clone())),
+                ));
+            }
+            // Structure sans champ : `struct Vide;` s'utilise directement comme valeur.
+            if let Some(Ty::Adt(i)) = self.type_names.get(var)
+                && matches!(&self.types.adts[*i].kind, AdtKind::Struct { fields } if fields.is_empty())
+            {
+                return Ok((CExpr::List(Vec::new()), Ty::Adt(*i)));
             }
             if self.fns.contains_key(var) || self.hosts.contains_key(var.as_str()) {
                 return Err(rerr(
@@ -3106,7 +3272,26 @@ impl Lowerer<'_> {
         if path.len() == 1 {
             let fname = &path[0];
             if let Some(local) = self.lookup(fname) {
-                let ty = self.types.display(&self.f.locals[local].ty);
+                let local_ty = self.f.locals[local].ty.clone();
+                if matches!(self.types.strip(&local_ty), Ty::Fn(..)) {
+                    // Appel d'une fermeture rangée dans une variable.
+                    let mut values = Vec::new();
+                    for a in args {
+                        let mut pre = Vec::new();
+                        let v = self.value(a, &mut pre)?;
+                        values.push((pre, v));
+                    }
+                    let mut parts = Vec::new();
+                    let mut typed = Vec::new();
+                    for (pre, (v, t)) in values {
+                        parts.push((pre, v));
+                        typed.push(t);
+                    }
+                    let vs = self.sequence(parts, line, out);
+                    let args = vs.into_iter().zip(typed).collect();
+                    return self.apply_closure(callee, args, line, out);
+                }
+                let ty = self.types.display(&local_ty);
                 return Err(rerr(
                     line,
                     "E0618",
@@ -3143,6 +3328,9 @@ impl Lowerer<'_> {
             if let Some(sig) = self.fns.get(fname).cloned() {
                 return self.call_user(&sig, None, args, line, out);
             }
+            if let Some(decl) = self.generic_decls.get(fname).cloned() {
+                return self.call_generic(&decl, args, line, out);
+            }
             if let Some(&host) = self.hosts.get(fname.as_str()) {
                 return self.call_host(host, fname, args, line, out);
             }
@@ -3174,6 +3362,8 @@ impl Lowerer<'_> {
             }
             let ty = if ty_name == "Self" {
                 self.self_ty.clone()
+            } else if let Some(t) = self.generics.get(ty_name) {
+                Some(self.types.strip(t))
             } else {
                 self.type_names.get(ty_name).cloned()
             };
@@ -3216,6 +3406,23 @@ impl Lowerer<'_> {
             return Ok((CExpr::Tuple(items), Ty::Adt(adt)));
         }
         Err(self.unknown_name(&path.join("::"), line))
+    }
+
+    /// Texte d'une valeur d'un type qui a `impl Display` : appelle sa méthode `fmt`.
+    fn display_call(&mut self, adt: usize, value: CExpr, line: u32, out: &mut Vec<CStmt>) -> CExpr {
+        let slot = self.fns[&format!("{adt}::fmt")].slot.clone();
+        let r = self.temp();
+        out.push(CStmt {
+            line,
+            kind: K::Assign(
+                Target::Name(r.clone()),
+                CExpr::Call(
+                    Box::new(name(&slot)),
+                    vec![value, CExpr::Str(String::new())],
+                ),
+            ),
+        });
+        index(name(&r), int(1))
     }
 
     fn arg_count(&self, fname: &str, expected: usize, got: usize, line: u32) -> ScriptError {
@@ -3453,6 +3660,27 @@ impl Lowerer<'_> {
         line: u32,
         out: &mut Vec<CStmt>,
     ) -> R<(CExpr, Ty)> {
+        // Itérateurs : une chaîne terminée par un consommateur (sum, collect, find…).
+        if iter::is_consumer(method)
+            && let Some(chain) = self.iterator_chain(receiver)
+        {
+            let consumer = iter::Consumer::new(method, args, line)?;
+            return self.lower_chain(&chain, consumer, false, line, out);
+        }
+        // Une chaîne sans consommateur : ses éléments sont rangés dans un itérateur.
+        if iter::is_adapter(method) {
+            let whole = Expr {
+                kind: ExprKind::MethodCall(
+                    Box::new(receiver.clone()),
+                    method.to_string(),
+                    args.to_vec(),
+                ),
+                line,
+            };
+            if let Some(chain) = self.iterator_chain(&whole) {
+                return self.lower_chain(&chain, iter::Consumer::Collect, true, line, out);
+            }
+        }
         // Intervalles : (a..b).rev(), (a..b).step_by(k).
         if let ExprKind::Range(Some(a), Some(b), inclusive) = &receiver.kind
             && (method == "rev" || method == "step_by")
@@ -3494,6 +3722,38 @@ impl Lowerer<'_> {
             }
         };
         let base = self.types.strip(&rty);
+        // Méthodes à fermeture d'Option et de Vec.
+        if let Ty::Option(inner) = &base
+            && iter::is_option_closure(method)
+        {
+            let option = match (&place, value.clone()) {
+                (Some(p), _) => {
+                    let mut p = p.clone();
+                    self.check_use(&p, receiver.line)?;
+                    self.auto_deref(&mut p);
+                    self.do_move(&p, receiver.line)?;
+                    self.place_expr(&p)
+                }
+                (None, Some(v)) => v,
+                (None, None) => unreachable!(),
+            };
+            return self.option_closure(method, option, (**inner).clone(), args, line, out);
+        }
+        if let Ty::Vec(elem) = &base
+            && matches!(method, "retain" | "sort_by_key")
+        {
+            let Some(mut p) = place.clone() else {
+                return Err(unsupported(
+                    line,
+                    "retain / sort_by_key sur une valeur temporaire",
+                    "retain / sort_by_key on a temporary value",
+                ));
+            };
+            self.check_use(&p, receiver.line)?;
+            self.auto_deref(&mut p);
+            self.check_mutable(&p, receiver.line, true)?;
+            return self.vec_closure(method, &p, (**elem).clone(), args, line, out);
+        }
         let kind = Recv::new(self, &base, method, receiver.line)?;
         // Méthodes du joueur.
         if let Recv::User(sig) = &kind {
@@ -3627,6 +3887,7 @@ impl Lowerer<'_> {
                 bin(if positive { CBin::Gt } else { CBin::Lt }, recv, int(0)),
                 Ty::Bool,
             ),
+            Recv::DisplayString(adt) => (self.display_call(adt, recv, line, out), Ty::String),
             Recv::ToString(ty) => {
                 let desc = CExpr::Const(self.types.descriptor(&ty));
                 (
@@ -4398,6 +4659,12 @@ impl Lowerer<'_> {
             }
             _ => None,
         };
+        if mutable_source.is_none()
+            && let Some(chain) = self.iterator_chain(iterable)
+        {
+            let consumer = iter::Consumer::For(pat, body);
+            return self.lower_chain(&chain, consumer, false, line, out);
+        }
         if let Some(source) = mutable_source {
             let Some(mut place) = self.place(source, out)? else {
                 return Err(unsupported(
@@ -4701,6 +4968,10 @@ impl Lowerer<'_> {
                         match self.types.strip(&ty) {
                             Ty::Str | Ty::String => push(v),
                             Ty::Int => push(CExpr::BuiltinCall(Builtin::Str, vec![v])),
+                            Ty::Adt(i) if self.types.adts[i].display => {
+                                let shown = self.display_call(i, v, line, out);
+                                push(shown);
+                            }
                             other => {
                                 let desc = CExpr::Const(self.types.descriptor(&other));
                                 push(CExpr::BuiltinCall(
@@ -4777,6 +5048,8 @@ enum Recv {
     IntRemEuclid,
     IntSign(bool),
     ToString(Ty),
+    /// `.to_string()` d'un type qui a `impl Display`.
+    DisplayString(usize),
     Len,
     IsEmpty,
     AsStr,
@@ -4831,9 +5104,9 @@ impl Recv {
                     " ici : utilise-la directement dans une boucle for".to_string(),
                     " here: use it directly in a for loop".to_string(),
                 ),
-                (_, "map" | "filter" | "fold" | "any" | "all" | "find" | "position") => (
-                    " (les fermetures |x| … arrivent plus tard : utilise une boucle for)".to_string(),
-                    " (closures |x| … come later: use a for loop)".to_string(),
+                (Ty::Vec(_), m) if iter::is_adapter(m) || iter::is_consumer(m) => (
+                    format!(" : un Vec n'est pas un itérateur, écris v.iter().{m}(…)"),
+                    format!(": a Vec is not an iterator, write v.iter().{m}(…)"),
                 ),
                 _ => (String::new(), String::new()),
             };
@@ -4888,6 +5161,7 @@ impl Recv {
                 }
                 match method {
                     "clone" => clone_of(l, base)?,
+                    "to_string" if l.types.adts[i].display => Recv::DisplayString(i),
                     _ => return Err(no_method(l)),
                 }
             }

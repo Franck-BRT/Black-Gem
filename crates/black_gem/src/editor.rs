@@ -52,7 +52,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    fn templates(&self) -> &'static [(&'static str, &'static str, &'static str); 4] {
+    fn templates(&self) -> &'static [(&'static str, &'static str, &'static str); 5] {
         if self.rust_templates {
             &RUST_TEMPLATES
         } else {

@@ -10,6 +10,8 @@ use gem_script::{
     looks_like_rust,
 };
 
+use std::collections::{BTreeMap, VecDeque};
+
 use crate::{
     TICKS_PER_SECOND,
     building::{BuildingKind, BuildingState, Buildings, SHOTS_PER_CRYSTAL, Storage},
@@ -59,6 +61,14 @@ enum GameFn {
     Say,
     Core,
     Drilling,
+    // Coordination entre golems.
+    Reserve,
+    Release,
+    IsReserved,
+    Send,
+    Receive,
+    MyId,
+    GolemCount,
     // Versions Rust : les objets portés sont des valeurs (ownership).
     TakeItem,
     TakeGemItem,
@@ -67,7 +77,7 @@ enum GameFn {
 
 /// Nom français, nom anglais, nombre d'arguments (min, max). Les fonctions réservées à Rust
 /// ont des noms qu'un programme Python ne peut pas écrire.
-const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 23] = [
+const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 30] = [
     (GameFn::MoveTo, &["aller_vers", "move_to"], 1, 2),
     (GameFn::Step, &["avancer", "step"], 1, 1),
     (GameFn::Position, &["position"], 0, 0),
@@ -93,6 +103,18 @@ const GAME_FUNCTIONS: [(GameFn, &[&str], usize, usize); 23] = [
     (GameFn::Say, &["dire", "say", "print"], 0, usize::MAX),
     (GameFn::Core, &["coeur", "cœur", "core"], 0, 0),
     (GameFn::Drilling, &["forage", "drilling"], 0, 0),
+    (GameFn::Reserve, &["reserver", "réserver", "reserve"], 1, 2),
+    (GameFn::Release, &["liberer", "libérer", "release"], 1, 2),
+    (
+        GameFn::IsReserved,
+        &["reservee", "réservée", "is_reserved"],
+        1,
+        2,
+    ),
+    (GameFn::Send, &["envoyer", "send"], 2, 2),
+    (GameFn::Receive, &["recevoir", "receive"], 1, 1),
+    (GameFn::MyId, &["mon_numero", "mon_numéro", "my_id"], 0, 0),
+    (GameFn::GolemCount, &["nb_golems", "golem_count"], 0, 0),
     (GameFn::TakeItem, &["rust:prendre"], 0, 0),
     (GameFn::TakeGemItem, &["rust:prendre_gemme"], 0, 0),
     (GameFn::DropItem, &["rust:deposer"], 1, 1),
@@ -203,6 +225,43 @@ pub fn golem_rust_api() -> RustApi {
                 Option(Box::new(pos())),
             ),
             f(&["forage", "drilling"], GameFn::Drilling, vec![], Int),
+            f(
+                &["reserver", "réserver", "reserve"],
+                GameFn::Reserve,
+                vec![pos()],
+                Bool,
+            ),
+            f(
+                &["liberer", "libérer", "release"],
+                GameFn::Release,
+                vec![pos()],
+                Unit,
+            ),
+            f(
+                &["reservee", "réservée", "is_reserved"],
+                GameFn::IsReserved,
+                vec![pos()],
+                Bool,
+            ),
+            f(&["envoyer", "send"], GameFn::Send, vec![Int, Int], Unit),
+            f(
+                &["recevoir", "receive"],
+                GameFn::Receive,
+                vec![Int],
+                Option(Box::new(Int)),
+            ),
+            f(
+                &["mon_numero", "mon_numéro", "my_id"],
+                GameFn::MyId,
+                vec![],
+                Int,
+            ),
+            f(
+                &["nb_golems", "golem_count"],
+                GameFn::GolemCount,
+                vec![],
+                Int,
+            ),
         ],
         enums: vec![RustEnum {
             names: vec!["Direction"],
@@ -353,7 +412,15 @@ pub struct World<'a> {
     pub drilling_percent: u32,
     /// Vitesse de vol, en unités fines par tick.
     pub golem_speed: i32,
+    /// Cases réservées par les golems (comme un verrou : un seul à la fois).
+    pub reservations: &'a mut BTreeMap<Tile, u32>,
+    /// Canaux de messages entre golems.
+    pub channels: &'a mut BTreeMap<i64, VecDeque<i64>>,
+    pub golem_count: u32,
 }
+
+/// Messages gardés au plus par canal.
+const CHANNEL_CAPACITY: usize = 32;
 
 impl Golem {
     /// Un tick de vie du golem : poursuivre l'action en cours, puis faire tourner le programme.
@@ -607,6 +674,56 @@ impl Host for GolemHost<'_, '_, '_> {
                 }
                 Ok(self.after_a_tick(Value::Bool(taken.is_some())))
             }
+            GameFn::Reserve => {
+                let tile = position_arg(name, &args)?;
+                let me = self.golem.id;
+                let owner = *self.world.reservations.entry(tile).or_insert(me);
+                done(Value::Bool(owner == me))
+            }
+            GameFn::Release => {
+                let tile = position_arg(name, &args)?;
+                if self.world.reservations.get(&tile) == Some(&self.golem.id) {
+                    self.world.reservations.remove(&tile);
+                }
+                done(Value::None)
+            }
+            GameFn::IsReserved => {
+                let tile = position_arg(name, &args)?;
+                let me = self.golem.id;
+                done(Value::Bool(
+                    self.world.reservations.get(&tile).is_some_and(|&g| g != me),
+                ))
+            }
+            GameFn::Send => {
+                let (Some(channel), Some(message)) = (args[0].as_int(), args[1].as_int()) else {
+                    return Err(game_error(
+                        "envoyer(canal, message) attend deux nombres",
+                        "send(channel, message) expects two numbers",
+                    ));
+                };
+                let queue = self.world.channels.entry(channel).or_default();
+                if queue.len() >= CHANNEL_CAPACITY {
+                    queue.pop_front();
+                }
+                queue.push_back(message);
+                done(Value::None)
+            }
+            GameFn::Receive => {
+                let Some(channel) = args[0].as_int() else {
+                    return Err(game_error(
+                        "recevoir(canal) attend un nombre",
+                        "receive(channel) expects a number",
+                    ));
+                };
+                let message = self
+                    .world
+                    .channels
+                    .get_mut(&channel)
+                    .and_then(VecDeque::pop_front);
+                done(message.map_or(Value::None, Value::Int))
+            }
+            GameFn::MyId => done(Value::Int(self.golem.id as i64)),
+            GameFn::GolemCount => done(Value::Int(self.world.golem_count as i64)),
             GameFn::TakeItem | GameFn::TakeGemItem => {
                 // Un golem qui porte déjà un objet le « reprend » : utile si son programme
                 // a été relancé pendant qu'il portait quelque chose.
@@ -673,7 +790,7 @@ impl Host for GolemHost<'_, '_, '_> {
 }
 
 /// Programmes d'exemple proposés dans l'éditeur (français, anglais).
-pub const TEMPLATES: [(&str, &str, &str); 4] = [
+pub const TEMPLATES: [(&str, &str, &str); 5] = [
     (
         "Ravitailleur",
         "# Ravitailleur : apporte des munitions aux tours qui en manquent.\n\
@@ -758,11 +875,36 @@ pub const TEMPLATES: [(&str, &str, &str); 4] = [
                  if enemies() > 0:\n            \
                      say(\"Warning:\", enemies(), \"enemies, nearest at\", nearest_enemy())\n",
     ),
+    (
+        "Équipe",
+        "# Équipe : plusieurs golems se partagent les tours sans se gêner.\n\
+         # reserver(x, y) ne réussit que pour un seul golem à la fois (un verrou).\n\
+         while True:\n    \
+             for x, y in tours():\n        \
+                 if munitions(x, y) < 12 and reserver(x, y):\n            \
+                     aller_vers(qg())\n            \
+                     if prendre():\n                \
+                         aller_vers(x, y)\n                \
+                         deposer()\n            \
+                     liberer(x, y)\n    \
+             attendre(1)\n",
+        "# Team: several golems share the towers without getting in the way.\n\
+         # reserve(x, y) only succeeds for one golem at a time (a lock).\n\
+         while True:\n    \
+             for x, y in towers():\n        \
+                 if ammo(x, y) < 12 and reserve(x, y):\n            \
+                     move_to(hq())\n            \
+                     if take():\n                \
+                         move_to(x, y)\n                \
+                         drop()\n            \
+                     release(x, y)\n    \
+             wait(1)\n",
+    ),
 ];
 
 /// Les mêmes programmes d'exemple, en Rust (Acte II) : les objets portés sont des valeurs
 /// qui se **déplacent**.
-pub const RUST_TEMPLATES: [(&str, &str, &str); 4] = [
+pub const RUST_TEMPLATES: [(&str, &str, &str); 5] = [
     (
         "Ravitailleur",
         r#"// Ravitailleur (Rust) : munitions pour les tours.
@@ -949,6 +1091,53 @@ fn main() {
                 println!("{} enemies, nearest: {:?}", enemies(), enemy);
             }
         }
+    }
+}
+"#,
+    ),
+    (
+        "Équipe",
+        r#"// Équipe (Rust) : chaque golem choisit la tour la plus vide
+// que personne n'a réservée. reserver() agit comme un verrou.
+fn main() {
+    loop {
+        let cible = tours()
+            .into_iter()
+            .filter(|&t| munitions(t) < 12 && !reservee(t))
+            .min_by_key(|&t| munitions(t));
+        if let Some(tour) = cible {
+            if reserver(tour) {
+                aller_vers(qg());
+                if let Some(cristal) = prendre() {
+                    aller_vers(tour);
+                    let _ = deposer(cristal);
+                }
+                liberer(tour);
+            }
+        }
+        attendre(1);
+    }
+}
+"#,
+        r#"// Team (Rust): each golem picks the emptiest tower
+// that nobody has reserved. reserve() works like a lock.
+fn main() {
+    loop {
+        let target = towers()
+            .into_iter()
+            .filter(|&t| ammo(t) < 12 && !is_reserved(t))
+            .min_by_key(|&t| ammo(t));
+        if let Some(tower) = target {
+            if reserve(tower) {
+                move_to(hq());
+                if let Some(crystal) = take() {
+                    move_to(tower);
+                    let _ = drop(crystal);
+                }
+                release(tower);
+            }
+        }
+        wait(1);
     }
 }
 "#,

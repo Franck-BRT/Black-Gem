@@ -18,7 +18,7 @@ pub mod map;
 pub mod noise;
 pub mod rng;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 pub use building::{BuildError, Building, BuildingKind, BuildingState};
 pub use enemy::{Enemy, Hit};
@@ -191,6 +191,10 @@ pub struct Simulation {
     pub events: Vec<SimEvent>,
     /// Cristaux livrés au QG (par convoyeur ou par golem) depuis le début.
     pub delivered: u32,
+    /// Coordination des golems : cases réservées (par quel golem)…
+    pub reservations: BTreeMap<Tile, u32>,
+    /// … et canaux de messages (numéro → messages en attente).
+    pub channels: BTreeMap<i64, VecDeque<i64>>,
     field: FlowField,
     /// Apparitions prévues, dans l'ordre chronologique.
     pending_spawns: VecDeque<PendingSpawn>,
@@ -257,6 +261,8 @@ impl Simulation {
             shots: Vec::new(),
             events: Vec::new(),
             delivered: 0,
+            reservations: BTreeMap::new(),
+            channels: BTreeMap::new(),
             outcome: None,
             field,
             pending_spawns: VecDeque::new(),
@@ -459,10 +465,21 @@ impl Simulation {
             enemies: &self.enemies,
             map_size: self.map.size,
             tick: self.tick,
+            reservations: &mut self.reservations,
+            channels: &mut self.channels,
+            golem_count: self.golems.len() as u32,
         };
         for golem in &mut self.golems {
             golem.update(&mut world);
         }
+        // Un golem arrêté (fin, erreur) libère ses réservations.
+        let running: Vec<u32> = self
+            .golems
+            .iter()
+            .filter(|g| g.status == GolemStatus::Running)
+            .map(|g| g.id)
+            .collect();
+        self.reservations.retain(|_, owner| running.contains(owner));
     }
 
     pub fn golem(&self, id: u32) -> Option<&Golem> {
@@ -782,8 +799,20 @@ impl Simulation {
             feed(g.pos.x as i64);
             feed(g.pos.y as i64);
             feed(g.line.unwrap_or(0) as i64);
+            feed(g.slow as i64);
             for byte in format!("{:?}{:?}", g.carrying, g.status).bytes() {
                 feed(byte as i64);
+            }
+        }
+        for (tile, owner) in &self.reservations {
+            feed(tile.x as i64);
+            feed(tile.y as i64);
+            feed(*owner as i64);
+        }
+        for (channel, messages) in &self.channels {
+            feed(*channel);
+            for m in messages {
+                feed(*m);
             }
         }
         hash
@@ -1068,6 +1097,29 @@ mod tests {
         };
         assert_eq!(error.line, 4);
         assert!(error.message(gem_script::Lang::English).contains("E0382"));
+    }
+
+    #[test]
+    fn golems_coordinate_with_reservations_and_messages() {
+        let mut sim = Simulation::new(4, 96);
+        sim.stock = 100;
+        sim.queue(Command::SpawnGolem);
+        sim.queue(Command::SpawnGolem);
+        sim.step();
+        sim.queue(Command::RunProgram {
+            golem: 1,
+            source: "dire(reserver(10, 10), mon_numero())\nenvoyer(7, 42)\nattendre(3)".into(),
+        });
+        sim.queue(Command::RunProgram {
+            golem: 2,
+            source: "fn main() {\n    attendre(1);\n    println!(\"{} {:?} {:?}\", reserver((10, 10)), recevoir(7), recevoir(7));\n}".into(),
+        });
+        run(&mut sim, 60);
+        assert_eq!(sim.golem(1).unwrap().log, vec!["True 1"]);
+        assert_eq!(sim.golem(2).unwrap().log, vec!["false Some(42) None"]);
+        // Quand le programme du premier golem se termine, sa réservation est libérée.
+        run(&mut sim, 120);
+        assert!(sim.reservations.is_empty());
     }
 
     #[test]

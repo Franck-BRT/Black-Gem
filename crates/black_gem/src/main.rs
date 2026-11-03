@@ -1,5 +1,5 @@
-//! Black Gem — prototype M7 : les golems se programment en Python ou en Rust (vérifié comme
-//! par rustc : types, ownership, emprunts), passe graphique, l'Arche, expéditions de 15 min
+//! Black Gem — prototype M8 : les golems se programment en Python ou en Rust (vérifié comme
+//! par rustc : types, ownership, emprunts, traits, itérateurs) et se coordonnent, passe graphique, l'Arche, expéditions de 15 min
 //! à plus d'une heure, forage du Cœur, usine, gemmes, tours.
 
 mod audio;

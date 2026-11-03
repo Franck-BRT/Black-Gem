@@ -274,9 +274,15 @@ L'interface du jeu est elle aussi disponible en français et en anglais.
   `prendre() -> Option<Objet>`, `deposer(objet) -> Result<(), Objet>` (l'objet est rendu en
   cas d'échec).
 - Un golem Rust exécute 80 instructions par tick (40 en Python).
-- Pas encore : traits, génériques, fermetures, durées de vie explicites, `&mut` gardé dans une
-  variable. Prochaines étapes de l'Acte II : traits et itérateurs, puis concurrence entre
-  golems.
+- M8 : fermetures (recopiées sur place quand on les passe à un itérateur, sinon fonction +
+  copie des captures), chaînes d'itérateurs traduites en une seule boucle (paresse fidèle :
+  `find` et `take` s'arrêtent tôt), traits avec méthodes par défaut, fonctions génériques
+  recopiées pour chaque type (monomorphisation), `impl fmt::Display`.
+- Coordination des golems (Python et Rust) : `reserver(pos)` / `liberer(pos)` /
+  `reservee(pos)` (un verrou par case, libéré quand le programme s'arrête), `envoyer(canal, n)`
+  / `recevoir(canal)` (file de messages), `mon_numero()`, `nb_golems()`.
+- Pas encore : `dyn Trait`, structures génériques, durées de vie explicites, `&mut` gardé
+  dans une variable.
 
 ### 7.6 Mobile
 
@@ -363,7 +369,7 @@ crates/
 | **M6** ✅ | Passe graphique « DSP » : ciel et géante gazeuse, étoiles, eau animée, particules, atterrissage de la capsule, relief ombré, chevrons de convoyeurs, grille de construction, SSAO (ordinateur) |
 | **M7** ✅ | Sous-ensemble Rust vérifié comme par rustc (types, ownership, emprunts), objets du jeu qui se déplacent, modèles Rust, Grimoire de l'Acte II |
 | **Confort** ✅ | Ennemis qui détruisent les bâtiments sur leur route (réparation hors combat), barres de vie, alertes, sons et musique jour / nuit synthétisés, tutoriel de la première expédition |
-| **M8** | Acte II, suite : traits, itérateurs et fermetures (`map`, `filter`), golems coordonnés |
+| **M8** ✅ | Acte II, suite : fermetures, itérateurs paresseux (`map`, `filter`, `find`…), traits et génériques (monomorphisation), `impl Display`, golems coordonnés (réservations, messages), modèle Équipe |
 | **M9** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
 | **M10** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions  |
 | **M11** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |

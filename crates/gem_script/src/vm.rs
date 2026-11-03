@@ -138,7 +138,9 @@ impl Vm {
             .enumerate()
             .filter_map(|(i, (name, value))| {
                 let value = value.as_ref()?;
-                if matches!(value, Value::Function(_)) || name.starts_with("__") {
+                if matches!(value, Value::Function(_) | Value::Closure(..))
+                    || name.starts_with("__")
+                {
                     return None;
                 }
                 let shown = name.split('#').next().unwrap_or(name).to_string();
@@ -366,10 +368,15 @@ impl Vm {
                 self.iters.pop();
             }
             Op::Call(argc) => {
-                let args = self.pop_args(argc);
+                let mut args = self.pop_args(argc);
                 let callee = self.pop();
-                let Value::Function(index) = callee else {
-                    return Err(ErrorKind::NotCallable(callee.type_name()));
+                let index = match callee {
+                    Value::Function(index) => index,
+                    Value::Closure(index, captured) => {
+                        args.splice(0..0, captured);
+                        index
+                    }
+                    other => return Err(ErrorKind::NotCallable(other.type_name())),
                 };
                 let function = &program.functions[index as usize];
                 if args.len() != function.params as usize {
@@ -402,6 +409,10 @@ impl Vm {
                     HostReply::Done(value) => self.stack.push(value),
                     HostReply::Suspend => self.state = State::Waiting,
                 }
+            }
+            Op::MakeClosure(function, captured) => {
+                let values = self.pop_args(captured);
+                self.stack.push(Value::Closure(function, values));
             }
             Op::Panic(kind) => {
                 return Err(match kind {
@@ -735,6 +746,14 @@ fn call_builtin(builtin: Builtin, args: Vec<Value>) -> Exec<Value> {
         Builtin::Reverse => match args.as_slice() {
             [Value::List(items)] => Ok(Value::List(items.iter().rev().cloned().collect())),
             [Value::Str(text)] => Ok(Value::Str(text.chars().rev().collect())),
+            [Value::Range(start, stop, step)] => {
+                let n = range_len(*start, *stop, *step);
+                if n == 0 {
+                    return Ok(Value::Range(0, 0, 1));
+                }
+                let last = start + (n - 1) * step;
+                Ok(Value::Range(last, start - step, -step))
+            }
             _ => Err(not_a_list(builtin, &args)),
         },
         Builtin::Enumerate => {

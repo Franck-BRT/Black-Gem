@@ -129,6 +129,8 @@ pub enum Op {
     CallHost(u32, u32),
     Return,
     Panic(PanicKind),
+    /// Fermeture : la fonction, et le nombre de valeurs capturées (sur la pile).
+    MakeClosure(u32, u32),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -667,6 +669,20 @@ impl Compiler<'_> {
             Expr::Const(value) => {
                 let c = self.constant(value.clone());
                 b.emit(Op::Const(c));
+            }
+            Expr::Lambda {
+                params,
+                captures,
+                body,
+            } => {
+                let mut all: Vec<String> = captures.iter().map(|(n, _)| n.clone()).collect();
+                all.extend(params.iter().cloned());
+                let line = b.line;
+                let index = self.function("<fermeture>", &all, body, Some(line))?;
+                for (_, value) in captures {
+                    self.expr(b, value)?;
+                }
+                b.emit(Op::MakeClosure(index, captures.len() as u32));
             }
             Expr::HostCall(id, args) => {
                 for arg in args {

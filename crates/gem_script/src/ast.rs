@@ -63,6 +63,12 @@ pub enum Expr {
     Method(String, String, Vec<Expr>),
     /// Valeur constante quelconque (descriptions de types pour l'affichage Rust…).
     Const(Value),
+    /// Fermeture : paramètres, valeurs capturées (nom du paramètre caché, valeur) et corps.
+    Lambda {
+        params: Vec<String>,
+        captures: Vec<(String, Expr)>,
+        body: Vec<Stmt>,
+    },
     /// Appel direct d'une fonction du jeu (par son identifiant).
     HostCall(u32, Vec<Expr>),
     /// Appel direct d'une fonction intégrée (y compris celles réservées à Rust).

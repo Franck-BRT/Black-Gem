@@ -708,9 +708,15 @@ fn update_grimoire(language: Res<Language>, mut text: Single<&mut Text, With<Gri
          3. Prêter, c'est & : f(&v) lit sans prendre. f(&mut v) modifie, \
          et une seule référence &mut à la fois (E0499).\n\
          4. Les nombres sont Copy : ils se copient au lieu de se déplacer.\n\n\
+         Les outils des machines lourdes :\n\
+         5. Fermetures et itérateurs : tours().into_iter().filter(|&t| munitions(t) < 12).count() \
+         parcourt une seule fois et s'arrête dès que possible (find, take).\n\
+         6. Traits : trait Forme { fn aire(&self) -> i64; } puis impl Forme for Carre. \
+         Une fonction fn f<T: Forme>(x: &T) marche pour tous les types qui l'implémentent.\n\
+         7. Travail d'équipe : reserver(pos) ne réussit que pour un golem à la fois (un verrou, \
+         comme Mutex) ; envoyer(canal, n) et recevoir(canal) font passer des messages.\n\n\
          Pour commencer : dans l'éditeur d'un golem, bascule les modèles sur « Rust ». \
-         Chaque erreur affiche le code de rustc (E0382…), comme dans le vrai Rust : \
-         tu peux la chercher dans la documentation officielle."
+         Chaque erreur affiche le code de rustc (E0382…), à chercher dans la documentation."
     } else {
         "ACT I — Python, the language of drones\n\
          Variables, conditions, loops, functions, lists: golems learn to deliver, set gems \
@@ -726,9 +732,15 @@ fn update_grimoire(language: Res<Language>, mut text: Single<&mut Text, With<Gri
          3. Lending is &: f(&v) reads without taking. f(&mut v) modifies, \
          and only one &mut reference at a time (E0499).\n\
          4. Numbers are Copy: they are copied instead of moved.\n\n\
+         The tools of heavy machines:\n\
+         5. Closures and iterators: towers().into_iter().filter(|&t| ammo(t) < 12).count() \
+         goes through once and stops as early as possible (find, take).\n\
+         6. Traits: trait Shape { fn area(&self) -> i64; } then impl Shape for Square. \
+         A function fn f<T: Shape>(x: &T) works for every type implementing it.\n\
+         7. Teamwork: reserve(pos) only succeeds for one golem at a time (a lock, like Mutex); \
+         send(channel, n) and receive(channel) pass messages.\n\n\
          To start: in a golem's editor, switch the templates to \"Rust\". \
-         Every error shows the rustc code (E0382…), just like real Rust: \
-         you can look it up in the official documentation."
+         Every error shows the rustc code (E0382…), to look up in the documentation."
     }
     .to_string();
 }
