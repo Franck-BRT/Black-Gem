@@ -21,7 +21,7 @@ pub mod rng;
 use std::collections::VecDeque;
 
 pub use building::{BuildError, Building, BuildingKind, BuildingState};
-pub use enemy::Enemy;
+pub use enemy::{Enemy, Hit};
 pub use expedition::{Bonuses, EXTRACTION_TICKS, ExpeditionConfig, Format};
 pub use gem::{Gem, GemColor, Item, TowerProfile};
 pub use geom::{Dir, Pos, Tile, UNITS_PER_TILE};
@@ -80,6 +80,49 @@ pub enum Command {
         slow: bool,
     },
 }
+
+/// Ce qui vient de se passer pendant un tick, pour le son, les effets et les alertes. Ce
+/// n'est pas de l'état : rien n'en dépend dans la simulation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimEvent {
+    Built {
+        kind: BuildingKind,
+        tile: Tile,
+    },
+    Demolished {
+        tile: Tile,
+    },
+    Shot {
+        color: Option<GemColor>,
+    },
+    EnemyKilled {
+        pos: Pos,
+        boss: bool,
+    },
+    HqHit,
+    BuildingHit {
+        kind: BuildingKind,
+        tile: Tile,
+    },
+    BuildingDestroyed {
+        kind: BuildingKind,
+        tile: Tile,
+    },
+    /// La nuit tombe : une vague arrive.
+    NightFalls {
+        wave: u32,
+    },
+    /// Un palier de forage est franchi : des boss arrivent.
+    StageReached {
+        stage: u32,
+    },
+    GolemBuilt,
+    Victory,
+    Defeat,
+}
+
+/// Délai sans être frappé avant que la réparation automatique commence.
+const REPAIR_DELAY: u64 = 10 * TICKS_PER_SECOND as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -144,6 +187,10 @@ pub struct Simulation {
     pub kills: u32,
     pub shots: Vec<Shot>,
     pub outcome: Option<Outcome>,
+    /// Événements du dernier tick.
+    pub events: Vec<SimEvent>,
+    /// Cristaux livrés au QG (par convoyeur ou par golem) depuis le début.
+    pub delivered: u32,
     field: FlowField,
     /// Apparitions prévues, dans l'ordre chronologique.
     pending_spawns: VecDeque<PendingSpawn>,
@@ -208,6 +255,8 @@ impl Simulation {
             wave: 0,
             kills: 0,
             shots: Vec::new(),
+            events: Vec::new(),
+            delivered: 0,
             outcome: None,
             field,
             pending_spawns: VecDeque::new(),
@@ -290,6 +339,7 @@ impl Simulation {
 
     /// Avance la simulation d'un tick.
     pub fn step(&mut self) {
+        self.events.clear();
         if self.outcome.is_some() {
             return;
         }
@@ -297,12 +347,17 @@ impl Simulation {
             self.apply(command);
         }
         self.update_waves();
+        let before = self.stock;
         self.buildings.update_logistics(&mut Storage {
             crystals: &mut self.stock,
             gems: &mut self.gems,
             drilled: &mut self.drilled,
         });
+        self.delivered += self.stock.saturating_sub(before);
+        let before = self.stock;
         self.update_golems();
+        self.delivered += self.stock.saturating_sub(before);
+        self.repair();
         self.update_drilling();
         self.fire_weapons();
         self.update_enemies();
@@ -316,6 +371,7 @@ impl Simulation {
                 if kind != BuildingKind::Hq && self.check_build(kind, tile).is_ok() {
                     self.stock -= kind.cost();
                     self.buildings.place(&self.map, kind, tile, dir);
+                    self.events.push(SimEvent::Built { kind, tile });
                 }
             }
             Command::Demolish { tile } => {
@@ -325,6 +381,7 @@ impl Simulation {
                     let id = b.id;
                     let removed = self.buildings.remove(id).unwrap();
                     self.stock += removed.kind.cost() / 2;
+                    self.events.push(SimEvent::Demolished { tile });
                     // La gemme d'une tour démolie n'est pas perdue.
                     if let State::Tower { gem: Some(gem), .. } = removed.state {
                         self.gems.push(gem);
@@ -356,6 +413,7 @@ impl Simulation {
                     pos.y += 2 * UNITS_PER_TILE;
                     pos.x += (id as i32 % 4 - 2) * UNITS_PER_TILE;
                     self.golems.push(Golem::new(id, pos));
+                    self.events.push(SimEvent::GolemBuilt);
                 }
             }
             Command::RunProgram { golem, source } => {
@@ -453,6 +511,7 @@ impl Simulation {
         if self.tick % day == day * 3 / 4 && self.extraction_until.is_none() {
             self.wave += 1;
             self.schedule_wave(self.wave, false);
+            self.events.push(SimEvent::NightFalls { wave: self.wave });
         }
         while let Some(&spawn) = self.pending_spawns.front() {
             if spawn.at > self.tick {
@@ -481,6 +540,8 @@ impl Simulation {
         let reached = (self.drilled / self.config.crystals_per_stage).min(stages);
         while self.stage < reached {
             self.stage += 1;
+            self.events
+                .push(SimEvent::StageReached { stage: self.stage });
             let level = self.wave + self.stage + 1;
             self.schedule_wave(level, true);
             if self.stage == stages {
@@ -540,6 +601,7 @@ impl Simulation {
             }
 
             let color = profile.gem.map(Gem::main_color);
+            self.events.push(SimEvent::Shot { color });
             for &(_, _, target) in in_range.iter().take(1 + profile.extra_targets as usize) {
                 hit(&mut self.enemies[target], &profile, profile.damage);
                 self.shots.push(Shot {
@@ -588,22 +650,46 @@ impl Simulation {
     }
 
     fn update_enemies(&mut self) {
+        for e in self.enemies.iter().filter(|e| e.hp <= 0) {
+            self.events.push(SimEvent::EnemyKilled {
+                pos: e.pos,
+                boss: e.boss,
+            });
+        }
         let before = self.enemies.len();
         self.enemies.retain(|e| e.hp > 0);
         self.kills += (before - self.enemies.len()) as u32;
 
         let hq_center = self.hq().center();
-        let damage: i32 = self
+        let buildings = &self.buildings;
+        let blocked = |tile: Tile| {
+            buildings
+                .at(tile)
+                .is_some_and(|b| b.kind != BuildingKind::Hq)
+        };
+        let hits: Vec<Hit> = self
             .enemies
             .iter_mut()
-            .map(|e| e.update(&self.field, hq_center))
-            .sum();
-        if damage > 0 {
+            .map(|e| e.update(&self.field, hq_center, blocked))
+            .collect();
+        let mut hq_damage = 0;
+        for hit in hits {
+            match hit {
+                Hit::Nothing => {}
+                Hit::Hq(damage) => hq_damage += damage,
+                Hit::Building(tile, damage) => self.damage_building(tile, damage),
+            }
+        }
+        if hq_damage > 0 {
             let hq_id = self.hq().id;
+            let tick = self.tick;
             let hq = self.buildings.get_mut(hq_id).unwrap();
-            hq.hp -= damage;
+            hq.hp -= hq_damage;
+            hq.last_hit = tick;
+            self.events.push(SimEvent::HqHit);
             if hq.hp <= 0 {
                 self.outcome = Some(Outcome::Defeat);
+                self.events.push(SimEvent::Defeat);
             }
         }
         if self
@@ -612,6 +698,46 @@ impl Simulation {
             && self.outcome.is_none()
         {
             self.outcome = Some(Outcome::Victory);
+            self.events.push(SimEvent::Victory);
+        }
+    }
+
+    /// Un ennemi frappe un bâtiment ; à zéro, le bâtiment est détruit (la gemme d'une tour
+    /// revient dans l'inventaire : elle est indestructible).
+    fn damage_building(&mut self, tile: Tile, damage: i32) {
+        let Some(id) = self.buildings.at(tile).map(|b| b.id) else {
+            return;
+        };
+        let tick = self.tick;
+        let building = self.buildings.get_mut(id).unwrap();
+        building.hp -= damage;
+        building.last_hit = tick;
+        let (kind, origin) = (building.kind, building.tile);
+        if building.hp > 0 {
+            self.events
+                .push(SimEvent::BuildingHit { kind, tile: origin });
+            return;
+        }
+        let removed = self.buildings.remove(id).unwrap();
+        if let State::Tower { gem: Some(gem), .. } = removed.state {
+            self.gems.push(gem);
+        }
+        self.events
+            .push(SimEvent::BuildingDestroyed { kind, tile: origin });
+    }
+
+    /// Réparation automatique : un bâtiment qui n'est plus attaqué depuis un moment récupère
+    /// 2 % de sa vie par seconde.
+    fn repair(&mut self) {
+        if !self.tick.is_multiple_of(TICKS_PER_SECOND as u64) {
+            return;
+        }
+        let tick = self.tick;
+        for id in self.buildings.ids() {
+            let building = self.buildings.get_mut(id).unwrap();
+            if building.hp < building.max_hp && tick >= building.last_hit + REPAIR_DELAY {
+                building.hp = (building.hp + (building.max_hp / 50).max(1)).min(building.max_hp);
+            }
         }
     }
 
@@ -635,6 +761,7 @@ impl Simulation {
         for b in self.buildings.iter() {
             feed(b.id as i64);
             feed(b.hp as i64);
+            feed(b.last_hit as i64);
             feed(b.tile.x as i64);
             feed(b.tile.y as i64);
             // Le format `Debug` des états est stable : il sert d'empreinte complète.
@@ -708,6 +835,75 @@ mod tests {
         for _ in 0..ticks {
             sim.step();
         }
+    }
+
+    #[test]
+    fn enemies_destroy_buildings_in_their_way_and_gems_survive() {
+        let mut sim = Simulation::new(4, 96);
+        let hq = sim.hq().tile;
+        let tile = Tile::new(hq.x - 6, hq.y + 1);
+        sim.stock = 500;
+        sim.queue(Command::Build {
+            kind: BuildingKind::Tower,
+            tile,
+            dir: Dir::East,
+        });
+        sim.step();
+        assert_eq!(
+            sim.events,
+            vec![SimEvent::Built {
+                kind: BuildingKind::Tower,
+                tile
+            }]
+        );
+        let gem = Gem::new(GemColor::Red, 1);
+        if let State::Tower { gem: slot, .. } = &mut sim
+            .buildings
+            .get_mut(sim.buildings.at(tile).unwrap().id)
+            .unwrap()
+            .state
+        {
+            *slot = Some(gem);
+        }
+        // Un ennemi très résistant, posé sur la tour (qui ne peut pas tirer sans munitions).
+        let spec = wave_spec(1, 100);
+        let mut enemy = Enemy::new(999, tile.center(), &spec);
+        enemy.hp = i32::MAX / 2;
+        sim.enemies.push(enemy);
+        let mut hit = false;
+        let mut destroyed = false;
+        for _ in 0..30 * 40 {
+            sim.step();
+            hit |= sim
+                .events
+                .iter()
+                .any(|e| matches!(e, SimEvent::BuildingHit { .. }));
+            destroyed |= sim.events.contains(&SimEvent::BuildingDestroyed {
+                kind: BuildingKind::Tower,
+                tile,
+            });
+            if destroyed {
+                break;
+            }
+        }
+        assert!(hit && destroyed);
+        assert!(sim.buildings.at(tile).is_none());
+        assert_eq!(sim.gems, vec![gem]);
+    }
+
+    #[test]
+    fn damaged_buildings_repair_themselves_after_a_while() {
+        let mut sim = Simulation::new(4, 96);
+        let id = sim.hq().id;
+        let tick = sim.tick;
+        let hq = sim.buildings.get_mut(id).unwrap();
+        hq.hp -= 100;
+        hq.last_hit = tick;
+        run(&mut sim, 5 * TICKS_PER_SECOND as u64);
+        assert_eq!(sim.hq().hp, sim.hq().max_hp - 100);
+        run(&mut sim, 10 * TICKS_PER_SECOND as u64);
+        assert!(sim.hq().hp > sim.hq().max_hp - 100);
+        assert!(sim.hq().hp <= sim.hq().max_hp);
     }
 
     #[test]

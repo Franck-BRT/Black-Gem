@@ -362,10 +362,12 @@ crates/
 | **M5** ✅ | L'Arche : éclats noirs, 12 recherches à prérequis, codex des 31 gemmes, bibliothèque de scripts, statistiques, sauvegarde (fichier / navigateur) |
 | **M6** ✅ | Passe graphique « DSP » : ciel et géante gazeuse, étoiles, eau animée, particules, atterrissage de la capsule, relief ombré, chevrons de convoyeurs, grille de construction, SSAO (ordinateur) |
 | **M7** ✅ | Sous-ensemble Rust vérifié comme par rustc (types, ownership, emprunts), objets du jeu qui se déplacent, modèles Rust, Grimoire de l'Acte II |
-| **M8** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
-| **M9** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions   |
-| **M10** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |
-| **M11** | Campagne scénarisée et briefings                                      |
+| **Confort** ✅ | Ennemis qui détruisent les bâtiments sur leur route (réparation hors combat), barres de vie, alertes, sons et musique jour / nuit synthétisés, tutoriel de la première expédition |
+| **M8** | Acte II, suite : traits, itérateurs et fermetures (`map`, `filter`), golems coordonnés |
+| **M9** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
+| **M10** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions  |
+| **M11** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |
+| **M12** | Campagne scénarisée et briefings                                      |
 
 ## 12. Décisions prises
 

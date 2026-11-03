@@ -47,6 +47,10 @@ pub struct Profile {
     pub stats: Stats,
     /// Langue de l'interface (« fr » / « en »).
     pub language: Option<String>,
+    /// Son coupé (touche M).
+    pub muted: bool,
+    /// Le tutoriel de la première expédition a été suivi (ou passé).
+    pub tutorial_done: bool,
 }
 
 /// Une recherche de l'Arche : amélioration permanente.

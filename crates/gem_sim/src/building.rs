@@ -146,6 +146,8 @@ pub struct Building {
     pub dir: Dir,
     pub hp: i32,
     pub max_hp: i32,
+    /// Dernier tick où un ennemi l'a frappé (la réparation automatique attend un peu).
+    pub last_hit: u64,
     pub state: BuildingState,
 }
 
@@ -386,6 +388,7 @@ impl Buildings {
                 } else {
                     0
                 },
+            last_hit: 0,
             state,
         };
         let size = building.size();

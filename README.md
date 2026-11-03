@@ -6,7 +6,22 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M7 — Rust et l'Acte II
+## État actuel : prototype M7 et passe de confort
+
+- **Les ennemis détruisent ce qui leur barre la route** : un convoyeur ou une tour sur leur
+  chemin est attaqué jusqu'à sa destruction (la gemme d'une tour détruite revient dans
+  l'inventaire). Un bâtiment qui n'est plus frappé depuis 10 s se répare tout seul.
+- **Barres de vie** au-dessus des ennemis blessés, des boss et des bâtiments endommagés.
+- **Alertes** au centre de l'écran (« La nuit tombe — vague 3 », « Le QG est attaqué ! »,
+  « Tour détruite ! ») et liseré rouge quand le QG est frappé.
+- **Sons et musique**, synthétisés par le jeu au démarrage (aucun fichier) : tirs selon la
+  gemme, destructions, boss, constructions, alarme de la nuit, victoire et défaite ; une
+  nappe calme le jour, une musique plus sombre et pulsée la nuit, en fondu. **M** coupe le son.
+- **Tutoriel** de la première expédition : sept étapes qui se cochent toutes seules (foreuse,
+  convoyeurs, tour, munitions, golem, première nuit, Grand foreur), avec le bouton utile qui
+  clignote. **F1** le réaffiche.
+
+## Prototype M7 — Rust et l'Acte II
 
 Les golems se programment aussi en **Rust**. Un programme Rust est **vérifié avant de
 partir**, comme le ferait `rustc` : types, mutabilité (`let mut`), **ownership** et
@@ -175,6 +190,8 @@ Déjà en place :
 | N | Nouvelle expédition |
 | Entrée (écran de départ) | Atterrir |
 | L | Langue FR / EN |
+| M | Couper / remettre le son |
+| F1 | Tutoriel |
 
 ## Jouer
 

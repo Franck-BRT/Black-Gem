@@ -4,7 +4,7 @@
 //! la fréquence d'affichage : c'est ce qui permettra le multijoueur en lockstep.
 
 use bevy::prelude::*;
-use gem_sim::{Format, Simulation, TICKS_PER_SECOND};
+use gem_sim::{Format, SimEvent, Simulation, TICKS_PER_SECOND};
 
 use crate::mission::{MissionMenu, playing};
 
@@ -12,6 +12,11 @@ pub const FIRST_SEED: u64 = 2026;
 
 #[derive(Resource, Deref, DerefMut)]
 pub struct Sim(pub Simulation);
+
+/// Événements de la simulation depuis l'image précédente (plusieurs ticks peuvent passer
+/// en une image) : sons, alertes, tutoriel.
+#[derive(Resource, Default, Deref, DerefMut)]
+pub struct SimEvents(pub Vec<SimEvent>);
 
 /// Vitesses de jeu disponibles, comme dans les RTS classiques.
 pub const SPEEDS: [f32; 3] = [1.0, 5.0, 20.0];
@@ -33,6 +38,8 @@ impl Plugin for SimPlugin {
         app.insert_resource(Sim(Simulation::with_format(FIRST_SEED, Format::Expedition)))
             .insert_resource(Time::<Fixed>::from_hz(TICKS_PER_SECOND as f64))
             .init_resource::<GameSpeed>()
+            .init_resource::<SimEvents>()
+            .add_systems(Last, |mut events: ResMut<SimEvents>| events.clear())
             .add_message::<NewPlanet>()
             // Le temps est figé tant que le joueur choisit son expédition.
             .add_systems(FixedUpdate, step_simulation.run_if(playing))
@@ -43,8 +50,9 @@ impl Plugin for SimPlugin {
     }
 }
 
-fn step_simulation(mut sim: ResMut<Sim>) {
+fn step_simulation(mut sim: ResMut<Sim>, mut events: ResMut<SimEvents>) {
     sim.step();
+    events.extend(sim.events.iter().copied());
 }
 
 fn speed_controls(

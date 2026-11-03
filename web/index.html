@@ -23,6 +23,27 @@
 <body>
   <div id="loading">BLACK GEM<small id="status">Chargement…</small></div>
   <canvas id="bevy"></canvas>
+  <script>
+    // Les navigateurs démarrent le son « suspendu » tant qu'on n'a pas touché la page :
+    // on garde les contextes audio créés par le jeu et on les relance au premier geste.
+    (() => {
+      const Original = window.AudioContext || window.webkitAudioContext;
+      if (!Original) return;
+      const contexts = [];
+      function Tracked(...args) {
+        const context = new Original(...args);
+        contexts.push(context);
+        return context;
+      }
+      Tracked.prototype = Original.prototype;
+      window.AudioContext = Tracked;
+      window.webkitAudioContext = Tracked;
+      const resume = () => contexts.forEach((c) => c.state !== "running" && c.resume());
+      for (const event of ["pointerdown", "keydown", "touchend"]) {
+        window.addEventListener(event, resume, { capture: true });
+      }
+    })();
+  </script>
   <script type="module">
     // WebGPU si le navigateur le permet (meilleur rendu), sinon WebGL2 (compatibilité maximale).
     async function hasWebGpu() {

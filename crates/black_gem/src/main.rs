@@ -2,6 +2,7 @@
 //! par rustc : types, ownership, emprunts), passe graphique, l'Arche, expéditions de 15 min
 //! à plus d'une heure, forage du Cœur, usine, gemmes, tours.
 
+mod audio;
 mod build;
 mod camera;
 mod code_buffer;
@@ -10,11 +11,13 @@ mod editor;
 mod hud;
 mod i18n;
 mod mission;
+mod overlay;
 mod palette;
 mod particles;
 mod profile;
 mod sim;
 mod sky;
+mod tutorial;
 mod view;
 mod world;
 
@@ -47,6 +50,11 @@ fn main() {
             mission::MissionPlugin,
             profile::ProfilePlugin,
             particles::ParticlesPlugin,
+        ))
+        .add_plugins((
+            audio::SoundPlugin,
+            overlay::OverlayPlugin,
+            tutorial::TutorialPlugin,
         ))
         .run();
 }

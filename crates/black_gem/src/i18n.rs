@@ -106,7 +106,8 @@ impl Language {
                  gemmes : clic sur une gemme de l'inventaire, puis sur une tour   U : retirer une gemme\n\
                  golems : clic sur un golem (ou dans la liste) pour écrire son programme (Python ou Rust)\n\
                  ZQSD / flèches : déplacer   A / E : pivoter   molette : zoom   clic droit + glisser : orienter\n\
-                 H : QG   V : Cœur   Espace : pause   1 / 2 / 3 : vitesse   N : nouvelle expédition   L : langue"
+                 H : QG   V : Cœur   Espace : pause   1 / 2 / 3 : vitesse   N : nouvelle expédition   L : langue\n\
+                 M : son   F1 : tutoriel"
             }
             (Tr::Controls, English) => {
                 "B: drill   C: conveyor   G: gem cutter   F: furnace   T: tower   O: Great drill   X: demolish   R: rotate\n\
@@ -114,7 +115,8 @@ impl Language {
                  gems: click a gem in the inventory, then a tower   U: remove a gem\n\
                  golems: click a golem (or in the list) to write its program (Python or Rust)\n\
                  WASD / arrows: move   Q / E: rotate   wheel: zoom   right click + drag: orbit\n\
-                 H: HQ   V: Core   Space: pause   1 / 2 / 3: speed   N: new expedition   L: language"
+                 H: HQ   V: Core   Space: pause   1 / 2 / 3: speed   N: new expedition   L: language\n\
+                 M: sound   F1: tutorial"
             }
             (Tr::LanguageName, French) => "Langue : Français",
             (Tr::LanguageName, English) => "Language: English",

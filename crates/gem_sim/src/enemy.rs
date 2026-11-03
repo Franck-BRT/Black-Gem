@@ -43,6 +43,15 @@ pub struct Enemy {
     damage: i32,
 }
 
+/// Ce qu'un ennemi frappe pendant un tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    Nothing,
+    Hq(i32),
+    /// Un bâtiment qui lui barre la route.
+    Building(Tile, i32),
+}
+
 /// Composition d'une vague.
 pub struct WaveSpec {
     pub per_nest: u32,
@@ -209,26 +218,48 @@ impl Enemy {
         }
     }
 
-    /// Fait avancer l'ennemi. Renvoie les dégâts infligés au QG pendant ce tick.
-    pub fn update(&mut self, field: &FlowField, hq_center: Pos) -> i32 {
+    /// Fait avancer l'ennemi vers le QG. Un bâtiment sur son chemin (`blocked`) l'arrête :
+    /// il le frappe jusqu'à le détruire.
+    pub fn update(
+        &mut self,
+        field: &FlowField,
+        hq_center: Pos,
+        blocked: impl Fn(Tile) -> bool,
+    ) -> Hit {
         self.prev_pos = self.pos;
         self.update_effects();
         self.attack_cooldown = self.attack_cooldown.saturating_sub(1);
-        if self.pos.distance_sq(hq_center) <= (ATTACK_RANGE as i64).pow(2) {
-            if self.attack_cooldown == 0 {
-                self.attack_cooldown = ATTACK_COOLDOWN;
-                return self.damage;
+        let strike = |enemy: &mut Self, hit: Hit| {
+            if enemy.attack_cooldown == 0 {
+                enemy.attack_cooldown = ATTACK_COOLDOWN;
+                hit
+            } else {
+                Hit::Nothing
             }
-            return 0;
+        };
+        if self.pos.distance_sq(hq_center) <= (ATTACK_RANGE as i64).pow(2) {
+            let damage = self.damage;
+            return strike(self, Hit::Hq(damage));
         }
-        let target = match field.next(self.pos.tile()) {
+        let here = self.pos.tile();
+        let next = field.next(here);
+        let obstacle = if blocked(here) {
+            Some(here)
+        } else {
+            next.filter(|&t| blocked(t))
+        };
+        if let Some(tile) = obstacle {
+            let damage = self.damage;
+            return strike(self, Hit::Building(tile, damage));
+        }
+        let target = match next {
             Some(tile) => tile.center(),
             // Sur une case du but (le QG) : on s'approche du centre.
             None => hq_center,
         };
         let speed = self.speed * (100 - self.slow_percent) / 100;
         self.pos.move_towards(target, speed);
-        0
+        Hit::Nothing
     }
 }
 

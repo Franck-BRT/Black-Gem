@@ -55,7 +55,7 @@ struct OutcomePanel;
 
 /// Bouton de la barre de construction.
 #[derive(Component)]
-struct ToolButton(Tool);
+pub struct ToolButton(pub Tool);
 
 #[derive(Component)]
 struct ToolLabel(Tool);
@@ -65,6 +65,7 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
+            .add_systems(PreStartup, default_font)
             .add_systems(Startup, spawn_hud)
             .add_systems(
                 Update,
@@ -83,7 +84,13 @@ impl Plugin for HudPlugin {
 }
 
 /// Police de l'interface (Exo 2, licence OFL) : intégrée au binaire, avec tous les accents.
-const UI_FONT: &[u8] = include_bytes!("../assets/fonts/Exo2.ttf");
+/// Exo 2 remplace la police par défaut : tous les textes ont les accents français.
+fn default_font(mut fonts: ResMut<Assets<Font>>) {
+    let _ = fonts.insert(AssetId::default(), Font::from_bytes(UI_FONT.to_vec()));
+}
+
+/// Police de l'interface (Exo 2), aussi installée comme police par défaut de tous les textes.
+pub const UI_FONT: &[u8] = include_bytes!("../assets/fonts/Exo2.ttf");
 
 const PANEL_COLOR: Color = Color::srgba(0.02, 0.01, 0.05, 0.6);
 const BUTTON_COLOR: Color = Color::srgba(0.12, 0.1, 0.18, 0.85);

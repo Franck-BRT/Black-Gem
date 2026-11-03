@@ -35,7 +35,7 @@ const CODE_FOCUSED: Color = Color::srgba(0.03, 0.02, 0.08, 0.95);
 const BUTTON_COLOR: Color = Color::srgba(0.12, 0.1, 0.18, 0.9);
 
 const CODE_FONT: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono.ttf");
-const UI_FONT: &[u8] = include_bytes!("../assets/fonts/Exo2.ttf");
+use crate::hud::UI_FONT;
 
 #[derive(Resource, Default)]
 pub struct Editor {

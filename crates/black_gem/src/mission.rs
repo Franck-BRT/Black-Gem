@@ -104,7 +104,7 @@ enum MenuLabel {
 const CARD: Color = Color::srgba(0.1, 0.08, 0.16, 0.95);
 const CARD_SELECTED: Color = Color::srgba(0.42, 0.2, 0.72, 0.98);
 
-const UI_FONT: &[u8] = include_bytes!("../assets/fonts/Exo2.ttf");
+use crate::hud::UI_FONT;
 
 pub struct MissionPlugin;
 
