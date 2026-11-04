@@ -1,6 +1,10 @@
 //! Construction : choix de l'outil, case visée, aperçu et envoi des ordres à la simulation.
 
-use bevy::{picking::hover::Hovered, prelude::*};
+use bevy::{
+    picking::hover::Hovered,
+    prelude::*,
+    ui::{ComputedNode, UiGlobalTransform},
+};
 use gem_sim::{BuildError, BuildingKind, Command, Dir, Gem, Simulation, Tile};
 
 use crate::{
@@ -121,6 +125,32 @@ fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<BuildState>) {
 /// Le pointeur est-il au-dessus d'un élément d'interface ?
 fn pointer_over_ui(blockers: &Query<&Hovered, With<BlocksWorldInput>>) -> bool {
     blockers.iter().any(|hovered| hovered.get())
+}
+
+/// Panneaux d'interface qui captent le doigt : leur rectangle à l'écran.
+pub type UiBlockers<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static InheritedVisibility,
+    ),
+    With<BlocksWorldInput>,
+>;
+
+/// Un point de l'écran (pixels logiques de la fenêtre) tombe-t-il sur l'interface ?
+/// Calculé directement : au moment où le doigt se lève, le survol est déjà oublié.
+pub fn point_over_ui(point: Vec2, scale_factor: f32, blockers: &UiBlockers) -> bool {
+    let p = point * scale_factor;
+    blockers.iter().any(|(node, transform, visible)| {
+        if !visible.get() || node.size.x <= 0.0 {
+            return false;
+        }
+        let half = node.size / 2.0;
+        let center = transform.translation;
+        (p.x - center.x).abs() <= half.x && (p.y - center.y).abs() <= half.y
+    })
 }
 
 /// Case visée par un point de l'écran, en tenant compte du relief et de la courbure.
@@ -348,29 +378,48 @@ fn mouse_build(
 
 /// Sur écran tactile : un appui bref pose le bâtiment ; avec les convoyeurs (ou la
 /// démolition), glisser le doigt trace une ligne.
+#[allow(clippy::too_many_arguments)]
 fn touch_build(
     touches: Res<Touches>,
     camera: Single<(&Camera, &GlobalTransform)>,
+    window: Single<&Window>,
     real_time: Res<Time<Real>>,
     curvature: Res<CurrentCurvature>,
-    blockers: Query<&Hovered, With<BlocksWorldInput>>,
+    blockers: UiBlockers,
     mut sim: ResMut<Sim>,
     mut state: ResMut<BuildState>,
+    mut on_ui: Local<std::collections::HashSet<u64>>,
 ) {
+    let scale = window.scale_factor();
+    let over_ui = |point: Vec2| point_over_ui(point, scale, &blockers);
+    // Un toucher commencé sur l'interface (un bouton) ne construit rien en se relevant.
+    for touch in touches.iter_just_pressed() {
+        if over_ui(touch.start_position()) {
+            on_ui.insert(touch.id());
+        }
+    }
     let fingers = touches.iter().count();
     // La case sous le doigt (aussi sans outil : toucher un golem l'ouvre).
     if fingers == 1
         && let Some(touch) = touches.iter().next()
-        && !pointer_over_ui(&blockers)
     {
-        state.cursor = pick_tile(touch.position(), *camera, &sim, curvature.params);
+        state.cursor = if on_ui.contains(&touch.id()) || over_ui(touch.position()) {
+            None
+        } else {
+            pick_tile(touch.position(), *camera, &sim, curvature.params)
+        };
+    }
+    let released: Vec<_> = touches.iter_just_released().cloned().collect();
+    let started_on_ui: Vec<bool> = released.iter().map(|t| on_ui.remove(&t.id())).collect();
+    if fingers == 0 {
+        on_ui.clear();
     }
     let Some(tool) = state.tool else {
         return;
     };
     let line_tool = is_line_tool(tool);
     for touch in touches.iter_just_pressed() {
-        if line_tool && fingers == 1 && !pointer_over_ui(&blockers) {
+        if line_tool && fingers == 1 && !over_ui(touch.position()) {
             state.drag_start = pick_tile(touch.position(), *camera, &sim, curvature.params);
         }
     }
@@ -378,8 +427,9 @@ fn touch_build(
         // Deux doigts : c'est la caméra qui bouge.
         state.drag_start = None;
     }
-    for touch in touches.iter_just_released() {
-        if fingers > 0 {
+    for (touch, started_on_ui) in released.iter().zip(started_on_ui) {
+        if fingers > 0 || started_on_ui {
+            state.drag_start = None;
             continue;
         }
         if line_tool && state.drag_start.is_some() {
@@ -396,7 +446,7 @@ fn touch_build(
             continue;
         }
         let is_tap = touch.start_position().distance(touch.position()) < 12.0;
-        if !is_tap || pointer_over_ui(&blockers) {
+        if !is_tap || over_ui(touch.position()) {
             continue;
         }
         if let Some(tile) = pick_tile(touch.position(), *camera, &sim, curvature.params) {
