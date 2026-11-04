@@ -11,6 +11,8 @@ use bevy::{
     },
     picking::{events::PointerClick, hover::Hovered},
     prelude::*,
+    ui::{ComputedNode, UiGlobalTransform},
+    window::PrimaryWindow,
 };
 use gem_script::looks_like_rust;
 use gem_sim::{
@@ -28,6 +30,8 @@ use crate::{
 
 /// Nombre de lignes de code visibles à la fois.
 const VISIBLE_LINES: usize = 11;
+/// Hauteur d'une ligne de code, en unités d'interface.
+const LINE_HEIGHT: f32 = 17.5;
 
 const PANEL_COLOR: Color = Color::srgba(0.02, 0.01, 0.05, 0.85);
 const CODE_BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.02, 0.9);
@@ -41,7 +45,9 @@ use crate::hud::UI_FONT;
 pub struct Editor {
     /// Golem dont on édite le programme (éditeur fermé si aucun).
     pub golem: Option<u32>,
-    buffer: CodeBuffer,
+    pub(crate) buffer: CodeBuffer,
+    /// Éditeur par blocs : on assemble le programme en touchant des instructions.
+    pub(crate) blocks: bool,
     /// Le clavier écrit dans le code (les raccourcis du jeu sont alors désactivés).
     pub focused: bool,
     /// Message ponctuel (programme enregistré…), affiché en tête de la console.
@@ -98,6 +104,8 @@ enum EditorButton {
     Save,
     Close,
     Template(usize),
+    /// Éditeur par blocs (au doigt) ou au clavier.
+    Blocks,
     /// Bascule des modèles entre Python et Rust.
     TemplateLanguage,
     /// Programme de la bibliothèque (usize::MAX : l'étiquette de la rangée).
@@ -200,6 +208,7 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         EditorButton::Run,
                         EditorButton::Stop,
                         EditorButton::Slow,
+                        EditorButton::Blocks,
                         EditorButton::Save,
                         EditorButton::Close,
                     ] {
@@ -240,7 +249,7 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                 .spawn((
                     CodeArea,
                     Node {
-                        height: Val::Px(VISIBLE_LINES as f32 * 17.5 + 16.0),
+                        height: Val::Px(VISIBLE_LINES as f32 * LINE_HEIGHT + 16.0),
                         padding: UiRect::all(Val::Px(8.0)),
                         // Les lignes trop longues sont coupées, pas renvoyées à la ligne.
                         overflow: Overflow::clip(),
@@ -250,9 +259,24 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                     BackgroundColor(CODE_BACKGROUND),
                     Hovered::default(),
                 ))
-                .observe(|_: On<PointerClick>, mut editor: ResMut<Editor>| {
-                    editor.focused = true;
-                })
+                .observe(
+                    |click: On<PointerClick>,
+                     mut editor: ResMut<Editor>,
+                     area: Single<(&ComputedNode, &UiGlobalTransform), With<CodeArea>>,
+                     window: Single<&Window, With<PrimaryWindow>>| {
+                        // La ligne touchée reçoit le curseur.
+                        let (node, transform) = *area;
+                        let pointer = click.pointer.position * window.scale_factor();
+                        let top = transform.translation.y - node.size.y / 2.0;
+                        let per_unit = 1.0 / node.inverse_scale_factor.max(1e-6);
+                        let y = (pointer.y - top) / per_unit - 8.0;
+                        let line = (y / LINE_HEIGHT).floor().max(0.0) as usize + editor.scroll;
+                        editor.buffer.cursor_to_line(line);
+                        if !editor.blocks {
+                            editor.focused = true;
+                        }
+                    },
+                )
                 .with_children(|area| {
                     area.spawn((
                         CodeText,
@@ -272,6 +296,7 @@ fn spawn_editor(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     // Liste des golems, en bas à droite.
     commands.spawn((
         GolemList,
+        crate::blocks::HideWhileCoding,
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(12.0),
@@ -314,6 +339,10 @@ fn spawn_button(parent: &mut ChildSpawnerCommands, button: EditorButton, font: &
                     }
                     EditorButton::Close => {
                         editor.golem = None;
+                        editor.focused = false;
+                    }
+                    EditorButton::Blocks => {
+                        editor.blocks = !editor.blocks;
                         editor.focused = false;
                     }
                     EditorButton::TemplateLanguage => {
@@ -377,12 +406,16 @@ fn open(editor: &mut Editor, sim: &Sim, id: u32, language: Language) {
 /// Sans outil de construction, un clic sur un golem ouvre son programme.
 fn select_golem_in_world(
     buttons: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     state: Res<BuildState>,
     sim: Res<Sim>,
     language: Res<Language>,
     mut editor: ResMut<Editor>,
 ) {
-    if !buttons.just_pressed(MouseButton::Left) || state.tool.is_some() {
+    let tapped = touches
+        .iter_just_released()
+        .any(|t| t.start_position().distance(t.position()) < 12.0);
+    if !(buttons.just_pressed(MouseButton::Left) || tapped) || state.tool.is_some() {
         return;
     }
     let Some(cursor) = state.cursor else {
@@ -491,7 +524,8 @@ fn update_editor_panel(
     sim: Res<Sim>,
     language: Res<Language>,
     mut editor: ResMut<Editor>,
-    mut panel: Single<&mut Visibility, With<EditorPanel>>,
+    effective: Res<crate::settings::Effective>,
+    mut panel: Single<(&mut Visibility, &mut Node), With<EditorPanel>>,
     mut title: Single<&mut Text, With<EditorTitle>>,
     mut area: Single<&mut BackgroundColor, With<CodeArea>>,
 ) {
@@ -500,10 +534,16 @@ fn update_editor_panel(
         editor.golem = None;
     }
     let Some(golem) = editor.golem.and_then(|id| sim.golem(id)) else {
-        **panel = Visibility::Hidden;
+        *panel.0 = Visibility::Hidden;
         return;
     };
-    **panel = Visibility::Inherited;
+    *panel.0 = Visibility::Inherited;
+    let panel_node = &mut panel.1;
+    // Au doigt, l'éditeur prend tout l'écran (le reste de l'interface se cache).
+    let top = if effective.touch_ui { 12.0 } else { 190.0 };
+    if panel_node.top != Val::Px(top) {
+        panel_node.top = Val::Px(top);
+    }
     let code_language = if looks_like_rust(&editor.buffer.text) {
         "Rust"
     } else {
@@ -544,6 +584,8 @@ fn update_button_labels(
             EditorButton::Slow => language.tr(Tr::Fast),
             EditorButton::Close => language.tr(Tr::Close),
             EditorButton::Template(i) if *i < TEMPLATES.len() => editor.templates()[*i].0,
+            EditorButton::Blocks if editor.blocks => language.tr(Tr::BlocksOn),
+            EditorButton::Blocks => language.tr(Tr::BlocksOff),
             EditorButton::TemplateLanguage if editor.rust_templates => "Rust",
             EditorButton::TemplateLanguage => "Python",
             EditorButton::Template(_) => language.tr(Tr::Templates),
@@ -583,7 +625,7 @@ fn update_code_text(
     let (cursor_line, cursor_col) = editor.buffer.line_col();
 
     // Faire défiler pour garder visible le curseur (en écriture) ou la ligne exécutée.
-    let follow = if editor.focused {
+    let follow = if editor.focused || editor.blocks {
         Some(cursor_line)
     } else {
         running_line.or(error_line).map(|l| l.saturating_sub(1))
@@ -600,6 +642,7 @@ fn update_code_text(
     (
         &editor.buffer,
         editor.focused,
+        editor.blocks,
         editor.scroll,
         running_line,
         error_line,
@@ -645,7 +688,7 @@ fn update_code_text(
             )
         };
         spans.push((format!("{marker}{number:>3} "), number_color));
-        if editor.focused && index == cursor_line {
+        if (editor.focused || editor.blocks) && index == cursor_line {
             let split = line
                 .char_indices()
                 .nth(cursor_col)
@@ -676,7 +719,12 @@ fn update_console(
     let Some(golem) = editor.golem.and_then(|id| sim.golem(id)) else {
         return;
     };
-    let mut lines = vec![language.tr(Tr::EditorHint).to_string()];
+    let hint = if editor.blocks {
+        Tr::BlocksHint
+    } else {
+        Tr::EditorHint
+    };
+    let mut lines = vec![language.tr(hint).to_string()];
     if looks_like_rust(&editor.buffer.text) {
         lines.push(language.tr(Tr::RustHint).to_string());
     }

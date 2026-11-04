@@ -59,6 +59,9 @@ pub enum Tr {
     StatusError,
     EditorHint,
     RustHint,
+    BlocksOn,
+    BlocksHint,
+    BlocksOff,
     Console,
     NoGolems,
     Drilling,
@@ -86,8 +89,8 @@ impl Language {
     pub fn tr(self, key: Tr) -> &'static str {
         use Language::*;
         match (key, self) {
-            (Tr::Subtitle, French) => "Prototype M8 — expédition",
-            (Tr::Subtitle, English) => "Prototype M8 — expedition",
+            (Tr::Subtitle, French) => "Prototype M9 — expédition",
+            (Tr::Subtitle, English) => "Prototype M9 — expedition",
             (Tr::Seed, French) => "Graine",
             (Tr::Seed, English) => "Seed",
             (Tr::Day, French) => "Jour",
@@ -198,6 +201,16 @@ impl Language {
             (Tr::StatusError, English) => "error",
             (Tr::EditorHint, French) => "Clic : écrire · Échap : retour au jeu · Ctrl+V : coller ·",
             (Tr::EditorHint, English) => "Click: type · Esc: back to the game · Ctrl+V: paste ·",
+            (Tr::BlocksHint, French) => {
+                "Touche une ligne pour y placer le curseur, puis une instruction pour l'ajouter dessous ·"
+            }
+            (Tr::BlocksHint, English) => {
+                "Tap a line to put the cursor there, then a statement to add it below ·"
+            }
+            (Tr::BlocksOn, French) => "Blocs : oui",
+            (Tr::BlocksOn, English) => "Blocks: on",
+            (Tr::BlocksOff, French) => "Blocs : non",
+            (Tr::BlocksOff, English) => "Blocks: off",
             (Tr::RustHint, French) => "Rust : vérifié avant de partir · 2× plus rapide",
             (Tr::RustHint, English) => "Rust: checked before running · 2× faster",
             (Tr::Console, French) => "Console",

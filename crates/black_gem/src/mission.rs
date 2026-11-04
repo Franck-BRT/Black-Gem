@@ -31,6 +31,7 @@ pub enum Tab {
     Codex,
     Grimoire,
     Stats,
+    Settings,
 }
 
 impl Default for MissionMenu {
@@ -88,6 +89,10 @@ struct StatsText;
 
 #[derive(Component)]
 struct GrimoireText;
+
+/// Page des réglages (remplie par `settings`).
+#[derive(Component)]
+pub struct SettingsPage;
 
 #[derive(Resource)]
 struct MenuFont(Handle<Font>);
@@ -197,6 +202,7 @@ fn spawn_menu(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                             Tab::Codex,
                             Tab::Grimoire,
                             Tab::Stats,
+                            Tab::Settings,
                         ] {
                             row.spawn((TabButton(tab), small_button(), BackgroundColor(CARD)))
                                 .observe(move |_: On<PointerClick>, mut menu: ResMut<MissionMenu>| {
@@ -244,6 +250,17 @@ fn spawn_menu(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         row_gap: Val::Px(8.0),
                         flex_wrap: FlexWrap::Wrap,
                         justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                ));
+                panel.spawn((
+                    TabPage(Tab::Settings),
+                    SettingsPage,
+                    Node {
+                        display: Display::None,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
+                        max_width: Val::Px(820.0),
                         ..default()
                     },
                 ));
@@ -441,6 +458,8 @@ fn update_tabs(
             (Tab::Grimoire, _) => "Grimoire",
             (Tab::Stats, true) => "Statistiques",
             (Tab::Stats, false) => "Statistics",
+            (Tab::Settings, true) => "Réglages",
+            (Tab::Settings, false) => "Settings",
         }
         .to_string();
     }

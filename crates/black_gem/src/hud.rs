@@ -125,6 +125,7 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     // En haut à gauche : titre et état de l'expédition.
     commands
         .spawn((
+            crate::blocks::HideWhileCoding,
             Node {
                 top: Val::Px(12.0),
                 left: Val::Px(12.0),
@@ -165,6 +166,7 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     // À droite : inventaire des gemmes (cliquer une gemme, puis une tour, pour la sertir).
     commands
         .spawn((
+            crate::blocks::HideWhileCoding,
             Node {
                 top: Val::Px(150.0),
                 right: Val::Px(12.0),
@@ -193,15 +195,18 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
 
     // En bas : barre de construction (cliquable, utilisable au doigt).
     commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(12.0),
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            row_gap: Val::Px(8.0),
-            ..default()
-        })
+        .spawn((
+            crate::blocks::HideWhileCoding,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(12.0),
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(8.0),
+                ..default()
+            },
+        ))
         .with_children(|parent| {
             parent.spawn((
                 InfoText,
@@ -433,10 +438,23 @@ fn announce_events(
     }
 }
 
-fn update_help(language: Res<Language>, mut text: Single<&mut Text, With<HelpText>>) {
+fn update_help(
+    language: Res<Language>,
+    effective: Res<crate::settings::Effective>,
+    mut help: Single<(&mut Text, &mut Node), With<HelpText>>,
+) {
     if language.is_changed() {
         let lang = *language;
-        text.0 = format!("{}\n{}", lang.tr(Tr::Controls), lang.tr(Tr::LanguageName));
+        help.0.0 = format!("{}\n{}", lang.tr(Tr::Controls), lang.tr(Tr::LanguageName));
+    }
+    // Les raccourcis clavier ne servent à rien au doigt : la barre tactile les remplace.
+    let display = if effective.touch_ui {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    if help.1.display != display {
+        help.1.display = display;
     }
 }
 

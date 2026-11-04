@@ -114,8 +114,7 @@ fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<BuildState>) {
         state.dir = state.dir.clockwise();
     }
     if keys.just_pressed(KeyCode::Escape) {
-        state.tool = None;
-        state.drag_start = None;
+        cancel_tool(&mut state);
     }
 }
 
@@ -347,7 +346,8 @@ fn mouse_build(
     }
 }
 
-/// Sur écran tactile : un appui bref sans glisser pose le bâtiment.
+/// Sur écran tactile : un appui bref pose le bâtiment ; avec les convoyeurs (ou la
+/// démolition), glisser le doigt trace une ligne.
 fn touch_build(
     touches: Res<Touches>,
     camera: Single<(&Camera, &GlobalTransform)>,
@@ -357,12 +357,46 @@ fn touch_build(
     mut sim: ResMut<Sim>,
     mut state: ResMut<BuildState>,
 ) {
+    let fingers = touches.iter().count();
+    // La case sous le doigt (aussi sans outil : toucher un golem l'ouvre).
+    if fingers == 1
+        && let Some(touch) = touches.iter().next()
+        && !pointer_over_ui(&blockers)
+    {
+        state.cursor = pick_tile(touch.position(), *camera, &sim, curvature.params);
+    }
     let Some(tool) = state.tool else {
         return;
     };
+    let line_tool = is_line_tool(tool);
+    for touch in touches.iter_just_pressed() {
+        if line_tool && fingers == 1 && !pointer_over_ui(&blockers) {
+            state.drag_start = pick_tile(touch.position(), *camera, &sim, curvature.params);
+        }
+    }
+    if fingers > 1 {
+        // Deux doigts : c'est la caméra qui bouge.
+        state.drag_start = None;
+    }
     for touch in touches.iter_just_released() {
+        if fingers > 0 {
+            continue;
+        }
+        if line_tool && state.drag_start.is_some() {
+            state.cursor = pick_tile(touch.position(), *camera, &sim, curvature.params);
+            let tiles = planned_tiles(&state, sim.core);
+            if let Some(&(_, dir)) = tiles.last()
+                && tiles.len() > 1
+            {
+                state.dir = dir;
+            }
+            let error = issue(&mut sim, tool, &tiles);
+            after_issue(&mut state, error, real_time.elapsed_secs());
+            state.drag_start = None;
+            continue;
+        }
         let is_tap = touch.start_position().distance(touch.position()) < 12.0;
-        if !is_tap || pointer_over_ui(&blockers) || touches.iter().count() > 0 {
+        if !is_tap || pointer_over_ui(&blockers) {
             continue;
         }
         if let Some(tile) = pick_tile(touch.position(), *camera, &sim, curvature.params) {
@@ -371,6 +405,17 @@ fn touch_build(
             after_issue(&mut state, error, real_time.elapsed_secs());
         }
     }
+}
+
+/// Outils qui se tracent en ligne (glisser).
+pub fn is_line_tool(tool: Tool) -> bool {
+    matches!(tool, Tool::Build(BuildingKind::Conveyor) | Tool::Demolish)
+}
+
+/// Annule l'outil en cours (Échap, ou le bouton tactile).
+pub fn cancel_tool(state: &mut BuildState) {
+    state.tool = None;
+    state.drag_start = None;
 }
 
 /// Aperçu : contour vert (possible) ou rouge (refusé) et flèche d'orientation.

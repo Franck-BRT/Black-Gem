@@ -51,6 +51,10 @@ pub struct Profile {
     pub muted: bool,
     /// Le tutoriel de la première expédition a été suivi (ou passé).
     pub tutorial_done: bool,
+    /// Réglages : qualité graphique, taille de l'interface, commandes tactiles.
+    pub quality: crate::settings::Quality,
+    pub ui_size: crate::settings::UiSize,
+    pub touch_controls: crate::settings::TouchControls,
 }
 
 /// Une recherche de l'Arche : amélioration permanente.

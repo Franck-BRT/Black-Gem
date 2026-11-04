@@ -237,6 +237,11 @@ fn update_tutorial(
     mut text: Single<&mut Text, (With<TutorialText>, Without<SkipLabel>)>,
     mut skip: Single<&mut Text, (With<SkipLabel>, Without<TutorialText>)>,
 ) {
+    // « Revoir le tutoriel » (réglages) : il repart.
+    if profile.is_changed() && !profile.tutorial_done && !tutorial.active {
+        tutorial.active = true;
+        tutorial.finished_at = None;
+    }
     let french = *language == Language::French;
     let colony = sim.config.format == Format::Colony;
     let visible = tutorial.active && !menu.open && editor.golem.is_none();

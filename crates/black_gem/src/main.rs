@@ -1,8 +1,9 @@
-//! Black Gem — prototype M8 : les golems se programment en Python ou en Rust (vérifié comme
+//! Black Gem — prototype M9 (jouable au doigt, réglages de qualité) : les golems se programment en Python ou en Rust (vérifié comme
 //! par rustc : types, ownership, emprunts, traits, itérateurs) et se coordonnent, passe graphique, l'Arche, expéditions de 15 min
 //! à plus d'une heure, forage du Cœur, usine, gemmes, tours.
 
 mod audio;
+mod blocks;
 mod build;
 mod camera;
 mod code_buffer;
@@ -15,8 +16,10 @@ mod overlay;
 mod palette;
 mod particles;
 mod profile;
+mod settings;
 mod sim;
 mod sky;
+mod touch;
 mod tutorial;
 mod view;
 mod world;
@@ -55,6 +58,9 @@ fn main() {
             audio::SoundPlugin,
             overlay::OverlayPlugin,
             tutorial::TutorialPlugin,
+            settings::SettingsPlugin,
+            touch::TouchPlugin,
+            blocks::BlocksPlugin,
         ))
         .run();
 }

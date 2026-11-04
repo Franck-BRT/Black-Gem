@@ -6,7 +6,31 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M8 — itérateurs, traits et travail d'équipe
+## État actuel : prototype M9 — jouable au doigt
+
+Black Gem se joue sur iPhone et tablette (dans Safari, sans installation ; *Partager →
+Sur l'écran d'accueil* pour le lancer en plein écran).
+
+- **Barre de commandes tactiles** (affichée dès qu'un écran tactile est détecté) : pause,
+  vitesse ×1 / ×5 / ×20, tourner le bâtiment, annuler l'outil, aller au QG, aller au Cœur.
+- **Gestes** : un doigt pour déplacer la caméra, pincer pour zoomer, tourner deux doigts pour
+  pivoter, les glisser verticalement pour incliner. Toucher pour construire ; avec les
+  convoyeurs (ou la démolition), **glisser le doigt trace la ligne**. Toucher un golem ouvre
+  son programme.
+- **Éditeur par blocs** (bouton « Blocs », activé d'office au doigt) : une palette
+  d'instructions Python ou Rust (« répéter toujours », « pour chaque tour », « si munitions
+  < 12 », « aller au QG »…) ; toucher une instruction l'ajoute sous la ligne du curseur, à la
+  bonne indentation (un bloc Rust se ferme tout seul avec `}`). Boutons pour décaler, reculer,
+  monter, descendre, supprimer la ligne, et **−1 / +1** pour changer son nombre. Toucher une
+  ligne du code y place le curseur (aussi à la souris). Le programme reste du vrai code. Au
+  doigt, l'éditeur prend tout l'écran le temps de programmer.
+- **Réglages** (nouvel onglet de l'Arche) : qualité graphique **Auto / Basse / Moyenne /
+  Haute** (ombres, bloom, occlusion ambiante, anticrénelage, nombre de particules ; « Auto »
+  choisit Basse au doigt, Moyenne dans un navigateur, Haute sur ordinateur), taille de
+  l'interface, commandes tactiles (Auto / Oui / Non), son, langue, revoir le tutoriel.
+- L'interface **suit la taille de l'écran** (dessinée pour 1280 × 720, agrandie au doigt).
+
+## Prototype M8 — itérateurs, traits et travail d'équipe
 
 La suite de l'Acte II : le Rust du jeu gagne les outils des « machines lourdes ».
 

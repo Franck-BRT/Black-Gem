@@ -10,8 +10,16 @@ use crate::{
     world::PlanetEntity,
 };
 
-/// Nombre maximal de particules en vie (au-delà, les nouvelles sont ignorées).
-const MAX_PARTICLES: usize = 900;
+/// Nombre maximal de particules en vie (au-delà, les nouvelles sont ignorées) ; dépend de la
+/// qualité graphique.
+#[derive(Resource)]
+pub struct ParticleBudget(pub usize);
+
+impl Default for ParticleBudget {
+    fn default() -> Self {
+        Self(900)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
@@ -66,6 +74,7 @@ pub struct ParticlesPlugin;
 impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Burst>()
+            .init_resource::<ParticleBudget>()
             .add_systems(Startup, create_kit)
             .add_systems(PostUpdate, (emit, animate).chain());
     }
@@ -118,6 +127,7 @@ fn emit(
     mut bursts: MessageReader<Burst>,
     kit: Res<ParticleKit>,
     particles: Query<(), With<Particle>>,
+    budget: Res<ParticleBudget>,
     mut seed: Local<u32>,
 ) {
     if *seed == 0 {
@@ -143,7 +153,7 @@ fn emit(
             Style::Flame => kit.flame.clone(),
         };
         for _ in 0..burst.count {
-            if alive >= MAX_PARTICLES {
+            if alive >= budget.0 {
                 break;
             }
             alive += 1;

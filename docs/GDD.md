@@ -370,7 +370,7 @@ crates/
 | **M7** ✅ | Sous-ensemble Rust vérifié comme par rustc (types, ownership, emprunts), objets du jeu qui se déplacent, modèles Rust, Grimoire de l'Acte II |
 | **Confort** ✅ | Ennemis qui détruisent les bâtiments sur leur route (réparation hors combat), barres de vie, alertes, sons et musique jour / nuit synthétisés, tutoriel de la première expédition |
 | **M8** ✅ | Acte II, suite : fermetures, itérateurs paresseux (`map`, `filter`, `find`…), traits et génériques (monomorphisation), `impl Display`, golems coordonnés (réservations, messages), modèle Équipe |
-| **M9** | Mobile : interface tactile, éditeur par blocs, préréglage qualité       |
+| **M9** ✅ | Mobile : barre de commandes tactiles, convoyeurs tracés au doigt, rotation à deux doigts, éditeur par blocs, réglages (qualité Auto / Basse / Moyenne / Haute, taille de l'interface), interface qui suit la taille de l'écran |
 | **M10** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions  |
 | **M11** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |
 | **M12** | Campagne scénarisée et briefings                                      |

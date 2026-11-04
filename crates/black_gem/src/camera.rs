@@ -79,8 +79,6 @@ pub struct RtsCameraPlugin;
 
 impl Plugin for RtsCameraPlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(PostStartup, enable_ambient_occlusion);
         app.add_systems(Startup, spawn_camera).add_systems(
             Update,
             (
@@ -110,17 +108,6 @@ fn spawn_camera(mut commands: Commands) {
             ..default()
         },
         Transform::default(),
-    ));
-}
-
-/// Sur ordinateur : occlusion ambiante (les recoins s'assombrissent, comme dans DSP).
-/// Elle demande de couper le MSAA ; le FXAA lisse alors les contours. Indisponible en WebGL2.
-#[cfg(not(target_arch = "wasm32"))]
-fn enable_ambient_occlusion(mut commands: Commands, camera: Single<Entity, Added<RtsCamera>>) {
-    commands.entity(*camera).insert((
-        bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
-        bevy::render::view::Msaa::Off,
-        bevy::anti_alias::fxaa::Fxaa::default(),
     ));
 }
 
@@ -188,10 +175,17 @@ fn mouse_controls(
     }
 }
 
-/// Un doigt : déplacer. Deux doigts : pincer pour zoomer, glisser verticalement pour incliner.
-fn touch_controls(touches: Res<Touches>, mut camera: Single<&mut RtsCamera>) {
+/// Un doigt : déplacer (sauf pendant le tracé d'une ligne de convoyeurs). Deux doigts :
+/// pincer pour zoomer, tourner pour pivoter, glisser verticalement pour incliner.
+fn touch_controls(
+    touches: Res<Touches>,
+    build: Res<crate::build::BuildState>,
+    mut camera: Single<&mut RtsCamera>,
+) {
     let active: Vec<_> = touches.iter().collect();
+    let drawing = build.tool.is_some_and(crate::build::is_line_tool);
     match active.as_slice() {
+        [_] if drawing => {}
         [finger] => {
             let scale = camera.target_distance / 600.0;
             let delta = rotate(-finger.delta() * scale, camera.target_yaw);
@@ -204,6 +198,11 @@ fn touch_controls(touches: Res<Touches>, mut camera: Single<&mut RtsCamera>) {
                 camera.target_distance =
                     (camera.target_distance * before / after).clamp(MIN_DISTANCE, MAX_DISTANCE);
             }
+            let before_angle = (b.previous_position() - a.previous_position()).to_angle();
+            let after_angle = (b.position() - a.position()).to_angle();
+            let twist = (after_angle - before_angle + std::f32::consts::PI).rem_euclid(TAU)
+                - std::f32::consts::PI;
+            camera.target_yaw -= twist;
             let vertical = (a.delta().y + b.delta().y) * 0.5;
             camera.target_pitch =
                 (camera.target_pitch + vertical * 0.004).clamp(MIN_PITCH, MAX_PITCH);
