@@ -371,7 +371,7 @@ crates/
 | **Confort** ✅ | Ennemis qui détruisent les bâtiments sur leur route (réparation hors combat), barres de vie, alertes, sons et musique jour / nuit synthétisés, tutoriel de la première expédition |
 | **M8** ✅ | Acte II, suite : fermetures, itérateurs paresseux (`map`, `filter`, `find`…), traits et génériques (monomorphisation), `impl Display`, golems coordonnés (réservations, messages), modèle Équipe |
 | **M9** ✅ | Mobile : barre de commandes tactiles, convoyeurs tracés au doigt, rotation à deux doigts, éditeur par blocs, réglages (qualité Auto / Basse / Moyenne / Haute, taille de l'interface), interface qui suit la taille de l'écran |
-| **M10** | Systèmes RTS : unités, héros, énergie, brouillard de guerre, factions  |
+| **M10** ✅ | Systèmes RTS : énergie (QG, centrales, manque qui ralentit tout), caserne et ravitaillement (habitats), Sentinelles et Blindés, sélection au cadre et ordres (attaquer en avançant / aller), héros Forgeron-Ingénieur (niveaux, onde de gel, pluie de cristaux, résurrection), nids destructibles (victoire en Colonie), brouillard de guerre, factions Forgerons / Colons |
 | **M11** | Multijoueur : coop et escarmouche, LAN puis en ligne                  |
 | **M12** | Campagne scénarisée et briefings                                      |
 

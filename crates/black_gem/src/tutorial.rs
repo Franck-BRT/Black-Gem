@@ -28,17 +28,21 @@ enum Step {
     Feed,
     Golem,
     Night,
+    Power,
+    Army,
     Core,
 }
 
 impl Step {
-    const ALL: [Step; 7] = [
+    const ALL: [Step; 9] = [
         Step::Drill,
         Step::Deliver,
         Step::Tower,
         Step::Feed,
         Step::Golem,
         Step::Night,
+        Step::Power,
+        Step::Army,
         Step::Core,
     ];
 
@@ -53,6 +57,8 @@ impl Step {
             }),
             Step::Golem => sim.golems.iter().any(|g| g.status == GolemStatus::Running),
             Step::Night => sim.wave >= 1 && !sim.is_night(),
+            Step::Power => has(BuildingKind::PowerPlant),
+            Step::Army => sim.units.iter().any(|u| u.kind != gem_sim::UnitKind::Hero),
             Step::Core => sim.core.is_none() || has(BuildingKind::CoreDrill),
         }
     }
@@ -64,6 +70,8 @@ impl Step {
             Step::Deliver | Step::Feed => Some(Tool::Build(BuildingKind::Conveyor)),
             Step::Tower => Some(Tool::Build(BuildingKind::Tower)),
             Step::Core => Some(Tool::Build(BuildingKind::CoreDrill)),
+            Step::Power => Some(Tool::Build(BuildingKind::PowerPlant)),
+            Step::Army => Some(Tool::Build(BuildingKind::Barracks)),
             Step::Golem | Step::Night => None,
         }
     }
@@ -105,6 +113,18 @@ impl Step {
             }
             (Step::Night, false) => {
                 "Hold until morning. Enemies destroy whatever blocks their way: protect your lines."
+            }
+            (Step::Power, true) => {
+                "Tes machines consomment de l'énergie : au-delà de ce que fournit le QG, tout ralentit. Construis une Centrale [P]."
+            }
+            (Step::Power, false) => {
+                "Your machines use power: beyond what the HQ provides, everything slows down. Build a Power plant [P]."
+            }
+            (Step::Army, true) => {
+                "Construis une Caserne [Y] et forme un soldat [Entrée]. Clic sur une unité (ou Tab pour le héros), puis clic droit pour l'envoyer : elle dissipe le brouillard et attaque les nids."
+            }
+            (Step::Army, false) => {
+                "Build Barracks [Y] and train a soldier [Enter]. Click a unit (or Tab for the hero), then right click to send it: it clears the fog and attacks nests."
             }
             (Step::Core, true) => {
                 "L'objectif : construis le Grand foreur [O] sur le Cœur (touche V pour y aller) et alimente-le en cristaux."

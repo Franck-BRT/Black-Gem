@@ -21,6 +21,14 @@ import bevy_pbr::render::{
 @group(constants::MATERIAL_BIND_GROUP) @binding(101)
 var<uniform> wave: vec4<f32>;
 
+// Brouillard de guerre (voir fogged.wesl).
+@group(constants::MATERIAL_BIND_GROUP) @binding(102)
+var fog_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103)
+var fog_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104)
+var<uniform> fog: vec4<f32>;
+
 @fragment
 fn fragment(
     in: VertexOutput,
@@ -46,12 +54,17 @@ fn fragment(
         pbr_input.material.base_color
     );
 
+    let uv = (p + vec2<f32>(fog.x)) * fog.y;
+    let seen = textureSample(fog_texture, fog_sampler, uv).r;
+    let light = select(1.0, seen, fog.z > 0.5);
+
     var out: FragmentOutput;
 @if(PREPASS_PIPELINE) {
     out = deferred_output(in, pbr_input);
 } @else {
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    out.color = vec4<f32>(out.color.rgb * light, out.color.a);
 }
     return out;
 }

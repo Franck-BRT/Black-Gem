@@ -111,6 +111,8 @@ fn health_bars(
     menu: Res<MissionMenu>,
     fixed: Res<Time<Fixed>>,
     curvature: Res<CurrentCurvature>,
+    fog: Res<crate::fog::FogOfWar>,
+    ui_scale: Res<UiScale>,
     camera: Single<(&Camera, &GlobalTransform), With<RtsCamera>>,
     mut bars: Query<BarParts, (With<Bar>, Without<BarFill>)>,
     mut fills: Query<(&mut Node, &mut BackgroundColor), With<BarFill>>,
@@ -120,7 +122,7 @@ fn health_bars(
     if !menu.open {
         let alpha = fixed.overstep_fraction();
         for enemy in &sim.enemies {
-            if enemy.hp >= enemy.max_hp && !enemy.boss {
+            if (enemy.hp >= enemy.max_hp && !enemy.boss) || !fog.visible_pos(enemy.pos) {
                 continue;
             }
             let from = world::pos_to_world(&sim.map, enemy.prev_pos);
@@ -128,6 +130,26 @@ fn health_bars(
             let (height, width) = if enemy.boss { (3.4, 64.0) } else { (1.6, 26.0) };
             let fraction = enemy.hp.max(0) as f32 / enemy.max_hp.max(1) as f32;
             wanted.push((from.lerp(to, alpha) + Vec3::Y * height, width, fraction));
+        }
+        // Le héros garde sa barre ; les soldats, quand ils sont blessés.
+        for unit in &sim.units {
+            let hero = unit.kind == gem_sim::UnitKind::Hero;
+            if unit.hp >= unit.max_hp && !hero {
+                continue;
+            }
+            let from = world::pos_to_world(&sim.map, unit.prev_pos);
+            let to = world::pos_to_world(&sim.map, unit.pos);
+            let (height, width) = if hero { (2.1, 40.0) } else { (1.5, 24.0) };
+            let fraction = unit.hp.max(0) as f32 / unit.max_hp.max(1) as f32;
+            wanted.push((from.lerp(to, alpha) + Vec3::Y * height, width, fraction));
+        }
+        for (i, nest) in sim.nests.iter().enumerate() {
+            let hp = sim.nest_hp[i];
+            if hp <= 0 || hp >= sim.nest_max_hp || !sim.is_explored(*nest) {
+                continue;
+            }
+            let at = world::tile_to_world(&sim.map, *nest) + Vec3::Y * 4.0;
+            wanted.push((at, 80.0, hp as f32 / sim.nest_max_hp.max(1) as f32));
         }
         for building in sim.buildings.iter() {
             if building.hp >= building.max_hp {
@@ -146,6 +168,8 @@ fn health_bars(
         let Ok(screen) = camera.world_to_viewport(camera_transform, bent) else {
             continue;
         };
+        // Les positions de l'interface sont multipliées par l'échelle de l'interface.
+        let screen = screen / ui_scale.0.max(0.01);
         let color = if fraction > 0.6 {
             Color::srgb(0.35, 0.95, 0.45)
         } else if fraction > 0.3 {
@@ -207,12 +231,17 @@ fn health_bars(
 /// Accord en français : « tour détruite », « convoyeur détruit ».
 fn feminine(kind: BuildingKind) -> &'static str {
     match kind {
-        BuildingKind::Drill | BuildingKind::Cutter | BuildingKind::Tower => "e",
+        BuildingKind::Drill
+        | BuildingKind::Cutter
+        | BuildingKind::Tower
+        | BuildingKind::PowerPlant
+        | BuildingKind::Barracks => "e",
         _ => "",
     }
 }
 
 fn collect_alerts(
+    sim: Res<Sim>,
     events: Res<SimEvents>,
     language: Res<Language>,
     time: Res<Time<Real>>,
@@ -264,6 +293,35 @@ fn collect_alerts(
                     None
                 }
             }
+            SimEvent::NestDestroyed { .. } => Some(if french {
+                format!(
+                    "Nid de corruption rasé ! +{} cristaux",
+                    gem_sim::NEST_REWARD
+                )
+            } else {
+                format!("Corruption nest razed! +{} crystals", gem_sim::NEST_REWARD)
+            }),
+            SimEvent::HeroLevelUp { level } => Some(if french {
+                format!("Le Forgeron-Ingénieur passe au niveau {level} !")
+            } else {
+                format!("The Smith-Engineer reaches level {level}!")
+            }),
+            SimEvent::PowerShortage => Some(
+                if french {
+                    "Manque d'énergie : tout ralentit. Construis une Centrale (P)."
+                } else {
+                    "Power shortage: everything slows down. Build a Power plant (P)."
+                }
+                .to_string(),
+            ),
+            SimEvent::UnitLost if sim.hero().is_none() && sim.fallen_hero.is_some() => Some(
+                if french {
+                    "Le héros est tombé : il revient au QG dans 30 s"
+                } else {
+                    "The hero has fallen: back at the HQ in 30 s"
+                }
+                .to_string(),
+            ),
             SimEvent::BuildingDestroyed { kind, .. } => {
                 let name = language.tr(Tr::Building(kind));
                 Some(if french {

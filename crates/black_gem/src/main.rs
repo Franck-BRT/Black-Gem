@@ -1,7 +1,8 @@
-//! Black Gem — prototype M9 (jouable au doigt, réglages de qualité) : les golems se programment en Python ou en Rust (vérifié comme
+//! Black Gem — prototype M10 (systèmes RTS : énergie, armée, héros, brouillard de guerre, factions ; jouable au doigt) : les golems se programment en Python ou en Rust (vérifié comme
 //! par rustc : types, ownership, emprunts, traits, itérateurs) et se coordonnent, passe graphique, l'Arche, expéditions de 15 min
 //! à plus d'une heure, forage du Cœur, usine, gemmes, tours.
 
+mod army;
 mod audio;
 mod blocks;
 mod build;
@@ -9,6 +10,7 @@ mod camera;
 mod code_buffer;
 mod curvature;
 mod editor;
+mod fog;
 mod hud;
 mod i18n;
 mod mission;
@@ -61,6 +63,8 @@ fn main() {
             settings::SettingsPlugin,
             touch::TouchPlugin,
             blocks::BlocksPlugin,
+            army::ArmyPlugin,
+            fog::FogPlugin,
         ))
         .run();
 }

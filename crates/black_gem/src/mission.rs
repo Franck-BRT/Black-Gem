@@ -4,7 +4,7 @@ use bevy::{
     picking::{events::PointerClick, hover::Hovered},
     prelude::*,
 };
-use gem_sim::{ExpeditionConfig, Format, Simulation, rng::mix64};
+use gem_sim::{ExpeditionConfig, Faction, Format, Simulation, rng::mix64};
 
 use crate::{
     build::BlocksWorldInput,
@@ -18,6 +18,7 @@ use crate::{
 pub struct MissionMenu {
     pub open: bool,
     pub format: Format,
+    pub faction: Faction,
     pub seed: u64,
     pub tab: Tab,
 }
@@ -39,6 +40,7 @@ impl Default for MissionMenu {
         Self {
             open: true,
             format: Format::Expedition,
+            faction: Faction::Smiths,
             seed: FIRST_SEED,
             tab: Tab::Expedition,
         }
@@ -58,6 +60,12 @@ struct FormatCard(Format);
 
 #[derive(Component)]
 struct FormatText(Format);
+
+#[derive(Component)]
+struct FactionCard(Faction);
+
+#[derive(Component)]
+struct FactionText(Faction);
 
 #[derive(Component)]
 struct PlanetText;
@@ -121,6 +129,7 @@ impl Plugin for MissionPlugin {
                 Update,
                 (
                     update_menu,
+                    update_factions,
                     update_tabs,
                     update_research,
                     update_codex,
@@ -293,7 +302,7 @@ fn spawn_menu(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         Node {
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
-                            row_gap: Val::Px(16.0),
+                            row_gap: Val::Px(11.0),
                             ..default()
                         },
                     ))
@@ -329,6 +338,39 @@ fn spawn_menu(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                                     FormatText(format),
                                     Text::default(),
                                     style(&font, 14.0, Color::srgb(0.9, 0.9, 0.95)),
+                                ));
+                            });
+                        }
+                    });
+
+                // Choix de la faction.
+                panel
+                    .spawn(Node {
+                        column_gap: Val::Px(12.0),
+                        flex_wrap: FlexWrap::Wrap,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        for faction in [Faction::Smiths, Faction::Settlers] {
+                            row.spawn((
+                                FactionCard(faction),
+                                Node {
+                                    width: Val::Px(390.0),
+                                    padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(CARD),
+                            ))
+                            .observe(move |_: On<PointerClick>, mut menu: ResMut<MissionMenu>| {
+                                menu.faction = faction;
+                            })
+                            .with_children(|card| {
+                                card.spawn((
+                                    FactionText(faction),
+                                    Text::default(),
+                                    style(&font, 13.0, Color::srgb(0.9, 0.9, 0.95)),
                                 ));
                             });
                         }
@@ -402,6 +444,7 @@ fn launch(
     // Les recherches de l'Arche s'appliquent à toute l'expédition.
     let config = ExpeditionConfig {
         bonuses: profile.bonuses(),
+        faction: menu.faction,
         ..menu.format.config()
     };
     sim.0 = Simulation::with_config(menu.seed, config);
@@ -836,8 +879,8 @@ fn update_menu(
         format!("Planet #{}", menu.seed)
     };
     goal.0 = match (menu.format, french) {
-        (Format::Colony, true) => "Bâtis ta colonie et survis aux nuits, aussi longtemps que possible.".into(),
-        (Format::Colony, false) => "Build your colony and survive the nights, as long as you can.".into(),
+        (Format::Colony, true) => "Bâtis ta colonie et survis aux nuits, aussi longtemps que possible…\nou rase tous les nids de corruption avec ton armée pour gagner.".into(),
+        (Format::Colony, false) => "Build your colony and survive the nights, as long as you can…\nor raze every corruption nest with your army to win.".into(),
         (_, true) => "Construis le Grand foreur sur le Cœur et alimente-le en cristaux.\nChaque palier réveille un boss. À 100 %, la Gemme Noire est extraite :\ntiens jusqu'au décollage.".into(),
         (_, false) => "Build the Great drill on the Core and feed it crystals.\nEach stage wakes up a boss. At 100%, the Black Gem is extracted:\nhold until lift-off.".into(),
     };
@@ -851,6 +894,43 @@ fn update_menu(
             (MenuLabel::Random, false) => "Random",
             (MenuLabel::Land, true) => "Atterrir",
             (MenuLabel::Land, false) => "Land",
+        }
+        .to_string();
+    }
+}
+
+/// Cartes de faction : description, et celle choisie en surbrillance.
+fn update_factions(
+    menu: Res<MissionMenu>,
+    language: Res<Language>,
+    mut cards: Query<(&FactionCard, &mut BackgroundColor)>,
+    mut texts: Query<(&FactionText, &mut Text)>,
+) {
+    if !menu.is_changed() && !language.is_changed() {
+        return;
+    }
+    let french = *language == Language::French;
+    for (card, mut background) in &mut cards {
+        background.0 = if card.0 == menu.faction {
+            CARD_SELECTED
+        } else {
+            CARD
+        };
+    }
+    for (text, mut content) in &mut texts {
+        content.0 = match (text.0, french) {
+            (Faction::Smiths, true) => {
+                "Forgerons — Sentinelles rapides qui tirent de loin ; tours +15 % de dégâts"
+            }
+            (Faction::Smiths, false) => {
+                "Smiths — fast Sentinels that shoot from afar; towers deal +15% damage"
+            }
+            (Faction::Settlers, true) => {
+                "Colons — Blindés lents et très résistants ; centrales +50 % d'énergie"
+            }
+            (Faction::Settlers, false) => {
+                "Settlers — slow, very tough Tanks; power plants +50% output"
+            }
         }
         .to_string();
     }

@@ -53,6 +53,16 @@ impl Default for Bonuses {
     }
 }
 
+/// Faction du joueur, choisie avant l'atterrissage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Faction {
+    /// Les Forgerons : maîtres des gemmes. Tours plus puissantes, forment des Sentinelles.
+    #[default]
+    Smiths,
+    /// Les Colons : industrie lourde. Foreuses et centrales plus efficaces, forment des Blindés.
+    Settlers,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Format {
     /// ~15 min : petite carte, journées courtes, deux paliers.
@@ -84,6 +94,7 @@ impl Format {
                 crystals_per_stage: 30,
                 difficulty: 70,
                 bonuses: Bonuses::default(),
+                faction: Faction::Smiths,
             },
             Format::Expedition => ExpeditionConfig {
                 format: self,
@@ -93,6 +104,7 @@ impl Format {
                 crystals_per_stage: 60,
                 difficulty: 100,
                 bonuses: Bonuses::default(),
+                faction: Faction::Smiths,
             },
             Format::GreatDrill => ExpeditionConfig {
                 format: self,
@@ -102,6 +114,7 @@ impl Format {
                 crystals_per_stage: 90,
                 difficulty: 120,
                 bonuses: Bonuses::default(),
+                faction: Faction::Smiths,
             },
             Format::Colony => ExpeditionConfig {
                 format: self,
@@ -111,6 +124,7 @@ impl Format {
                 crystals_per_stage: 0,
                 difficulty: 100,
                 bonuses: Bonuses::default(),
+                faction: Faction::Smiths,
             },
         }
     }
@@ -130,6 +144,7 @@ pub struct ExpeditionConfig {
     /// Force des vagues, en pour cent.
     pub difficulty: u32,
     pub bonuses: Bonuses,
+    pub faction: Faction,
 }
 
 impl ExpeditionConfig {

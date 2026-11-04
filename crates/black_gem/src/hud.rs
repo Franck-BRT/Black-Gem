@@ -221,9 +221,13 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
             parent
                 .spawn((
                     Node {
-                        column_gap: Val::Px(8.0),
+                        column_gap: Val::Px(6.0),
+                        row_gap: Val::Px(6.0),
                         padding: UiRect::all(Val::Px(8.0)),
                         border_radius: BorderRadius::all(Val::Px(8.0)),
+                        flex_wrap: FlexWrap::Wrap,
+                        justify_content: JustifyContent::Center,
+                        max_width: Val::Percent(100.0),
                         ..default()
                     },
                     BackgroundColor(PANEL_COLOR),
@@ -237,6 +241,9 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         Tool::Build(BuildingKind::Cutter),
                         Tool::Build(BuildingKind::Furnace),
                         Tool::Build(BuildingKind::Tower),
+                        Tool::Build(BuildingKind::PowerPlant),
+                        Tool::Build(BuildingKind::Barracks),
+                        Tool::Build(BuildingKind::Habitat),
                         Tool::Build(BuildingKind::CoreDrill),
                         Tool::Demolish,
                         Tool::Unsocket,
@@ -245,8 +252,8 @@ fn spawn_hud(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         bar.spawn((
                             ToolButton(tool),
                             Node {
-                                min_width: Val::Px(96.0),
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                                min_width: Val::Px(82.0),
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(8.0)),
                                 justify_content: JustifyContent::Center,
                                 border_radius: BorderRadius::all(Val::Px(6.0)),
                                 ..default()
@@ -461,18 +468,25 @@ fn update_help(
 fn update_tool_buttons(
     state: Res<BuildState>,
     language: Res<Language>,
-    mut buttons: Query<(&ToolButton, &mut BackgroundColor)>,
+    effective: Res<crate::settings::Effective>,
+    mut buttons: Query<(&ToolButton, &mut BackgroundColor, &mut Node)>,
     mut labels: Query<(&ToolLabel, &mut Text)>,
 ) {
-    if !state.is_changed() && !language.is_changed() {
+    if !state.is_changed() && !language.is_changed() && !effective.is_changed() {
         return;
     }
-    for (button, mut background) in &mut buttons {
+    // Au doigt, pas de raccourcis clavier : des boutons plus étroits, sur une seule ligne.
+    let touch = effective.touch_ui;
+    for (button, mut background, mut node) in &mut buttons {
         background.0 = if state.tool == Some(button.0) {
             BUTTON_SELECTED
         } else {
             BUTTON_COLOR
         };
+        let width = if touch { Val::Auto } else { Val::Px(82.0) };
+        if node.min_width != width {
+            node.min_width = width;
+        }
     }
     for (label, mut text) in &mut labels {
         text.0 = match label.0 {
@@ -483,6 +497,9 @@ fn update_tool_buttons(
                     BuildingKind::Cutter => "G",
                     BuildingKind::Furnace => "F",
                     BuildingKind::CoreDrill => "O",
+                    BuildingKind::PowerPlant => "P",
+                    BuildingKind::Barracks => "Y",
+                    BuildingKind::Habitat => "I",
                     _ => "T",
                 };
                 let unit = language.tr(Tr::Crystals).to_lowercase();
@@ -492,15 +509,25 @@ fn update_tool_buttons(
                     (1, Language::English) => "crystal".to_string(),
                     _ => unit,
                 };
-                format!(
-                    "{} [{}]\n{} {}",
-                    language.tr(Tr::Building(kind)),
-                    key,
-                    kind.cost(),
-                    unit
-                )
+                if touch {
+                    format!("{}\n{}", language.tr(Tr::Building(kind)), kind.cost())
+                } else {
+                    format!(
+                        "{} [{}]\n{} {}",
+                        language.tr(Tr::Building(kind)),
+                        key,
+                        kind.cost(),
+                        unit
+                    )
+                }
             }
+            Tool::Demolish if touch => format!("{}\n50 %", language.tr(Tr::Demolish)),
             Tool::Demolish => format!("{} [X]\n50 %", language.tr(Tr::Demolish)),
+            Tool::Unsocket if touch => format!(
+                "{}\n{}",
+                language.tr(Tr::Unsocket),
+                language.tr(Tr::Gems).to_lowercase()
+            ),
             Tool::Unsocket => format!(
                 "{} [U]\n{}",
                 language.tr(Tr::Unsocket),

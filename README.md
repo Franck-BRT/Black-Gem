@@ -6,7 +6,39 @@ avec [Bevy](https://bevy.org). Cibles : Windows, Linux, macOS et navigateur (iPh
 
 - [Game Design Document](docs/GDD.md)
 
-## État actuel : prototype M9 — jouable au doigt
+## État actuel : prototype M10 — systèmes RTS
+
+La base devient une armée : énergie, troupes, héros et brouillard de guerre.
+
+- **Énergie** : le QG fournit 6, chaque **Centrale** [P] 12 ; foreuses, tailleries, fours,
+  tours, casernes et Grand foreur consomment. En manque, **tout ralentit** à proportion (à 50 %
+  d'énergie, les machines n'avancent qu'un tick sur deux ; les bobines des centrales
+  tournent au ralenti).
+- **Caserne** [Y] (il faut une centrale) : **Entrée** ou le bouton « Former » forme une unité
+  (5 en file au plus). **Ravitaillement** : le QG loge 4 unités, chaque **Habitat** [I] 4 de
+  plus (il faut une caserne).
+- **Factions**, choisies avant l'atterrissage : les **Forgerons** forment des **Sentinelles**
+  (rapides, tir à distance) et leurs tours font +15 % de dégâts ; les **Colons** forment des
+  **Blindés** (lents, très résistants, frappent fort) et leurs centrales donnent +50 %.
+- **Commandes** : clic sur une unité (Maj pour en ajouter), **cadre de sélection** en
+  glissant, **clic droit** pour attaquer en avançant (Ctrl + clic droit : y aller sans
+  s'arrêter), **Tab** : le héros puis toute l'armée. Les unités se rangent en formation et
+  ripostent d'elles-mêmes. Au doigt : toucher une unité la sélectionne, toucher le sol l'y
+  envoie ; la rangée « Héros / Toute l'armée / pouvoirs / Former » est au-dessus de la barre
+  tactile.
+- **Le héros, le Forgeron-Ingénieur**, débarque avec le QG : il gagne de l'expérience en
+  combattant (10 niveaux, plus de vie et de dégâts), lance l'**Onde de gel** [J] (blesse et
+  ralentit autour de lui) et, au niveau 3, la **Pluie de cristaux** [K]. Tombé, il revient au
+  QG 30 s plus tard.
+- **Nids de corruption destructibles** (barre de vie) : une armée qui les rase gagne
+  60 cristaux et coupe les vagues qui en sortent. En **Colonie**, raser tous les nids est la
+  victoire.
+- **Brouillard de guerre** : le monde inconnu reste noir, le terrain déjà vu est assombri,
+  seuls les abords des bâtiments, des unités et des golems sont éclairés — les ennemis n'y
+  sont visibles qu'à portée de vue. On ne construit que sur un terrain exploré ; le Cœur et
+  les nids sont repérés depuis l'orbite. Le tutoriel gagne deux étapes (centrale, armée).
+
+## Prototype M9 — jouable au doigt
 
 Black Gem se joue sur iPhone et tablette (dans Safari, sans installation ; *Partager →
 Sur l'écran d'accueil* pour le lancer en plein écran).

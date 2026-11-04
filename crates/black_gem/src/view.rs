@@ -36,6 +36,7 @@ impl Plugin for ViewPlugin {
                         animate_cutters,
                         animate_furnaces,
                         animate_core_drill,
+                        animate_power_plants,
                         aim_turrets,
                         light_tower_gems,
                     ),
@@ -103,6 +104,13 @@ struct KitMeshes {
     frame: Handle<Mesh>,
     shaft: Handle<Mesh>,
     core_ring: Handle<Mesh>,
+    plant_body: Handle<Mesh>,
+    coil: Handle<Mesh>,
+    barracks_body: Handle<Mesh>,
+    barracks_roof: Handle<Mesh>,
+    door: Handle<Mesh>,
+    dome: Handle<Mesh>,
+    window_ring: Handle<Mesh>,
 }
 
 #[derive(Resource, Default)]
@@ -158,6 +166,14 @@ struct GolemCargo(u32);
 
 #[derive(Component)]
 struct FurnaceCore(u32);
+
+/// Bobine de la centrale : tourne quand l'énergie suffit.
+#[derive(Component)]
+struct PlantCoil;
+
+/// Un nid de corruption (indice dans la simulation).
+#[derive(Component)]
+pub struct NestView(pub usize);
 
 /// Gemme taillée : table, couronne et pavillon à facettes.
 fn gem_mesh() -> Mesh {
@@ -230,6 +246,13 @@ fn create_kit(
             frame: meshes.add(Cuboid::new(2.2, 0.25, 2.2)),
             shaft: meshes.add(Cylinder::new(0.32, 3.6).mesh().resolution(8)),
             core_ring: meshes.add(Torus::new(0.9, 1.15)),
+            plant_body: meshes.add(Cylinder::new(0.3, 0.9).mesh().resolution(10)),
+            coil: meshes.add(Torus::new(0.3, 0.4)),
+            barracks_body: meshes.add(Cuboid::new(0.86, 0.5, 0.78)),
+            barracks_roof: meshes.add(Cuboid::new(0.92, 0.08, 0.84)),
+            door: meshes.add(Cuboid::new(0.04, 0.3, 0.34)),
+            dome: meshes.add(Sphere::new(0.4).mesh().uv(16, 8)),
+            window_ring: meshes.add(Torus::new(0.36, 0.41)),
         },
         hull: material(StandardMaterial {
             base_color: Color::srgb(0.8, 0.82, 0.86),
@@ -357,6 +380,7 @@ fn sync_nests(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut views: R
         commands
             .spawn((
                 PlanetEntity,
+                NestView(i),
                 Transform::from_translation(center),
                 Visibility::default(),
             ))
@@ -606,9 +630,96 @@ fn sync_buildings(mut commands: Commands, sim: Res<Sim>, kit: Res<Kit>, mut view
                     Visibility::Hidden,
                 ));
             }
+            BuildingKind::PowerPlant => {
+                parent.spawn((
+                    Mesh3d(m.drill_base.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.12, 0.0),
+                ));
+                parent.spawn((
+                    Mesh3d(m.plant_body.clone()),
+                    MeshMaterial3d(kit.hull.clone()),
+                    Transform::from_xyz(0.0, 0.65, 0.0),
+                ));
+                for y in [0.45, 0.8] {
+                    parent.spawn((
+                        PlantCoil,
+                        Mesh3d(m.coil.clone()),
+                        MeshMaterial3d(kit.glow_cyan.clone()),
+                        Transform::from_xyz(0.0, y, 0.0),
+                        NotShadowCaster,
+                    ));
+                }
+                parent.spawn((
+                    Mesh3d(m.furnace_core.clone()),
+                    MeshMaterial3d(kit.gem_charged.clone()),
+                    Transform::from_xyz(0.0, 1.18, 0.0).with_scale(Vec3::splat(0.8)),
+                    NotShadowCaster,
+                ));
+            }
+            BuildingKind::Barracks => {
+                parent.spawn((
+                    Mesh3d(m.drill_base.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.12, 0.0),
+                ));
+                parent.spawn((
+                    Mesh3d(m.barracks_body.clone()),
+                    MeshMaterial3d(kit.hull.clone()),
+                    Transform::from_xyz(0.0, 0.5, 0.0),
+                ));
+                parent.spawn((
+                    Mesh3d(m.barracks_roof.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.79, 0.0),
+                ));
+                // Porte lumineuse, du côté de la sortie.
+                parent.spawn((
+                    Mesh3d(m.door.clone()),
+                    MeshMaterial3d(kit.glow_purple.clone()),
+                    Transform::from_xyz(0.44, 0.42, 0.0),
+                    NotShadowCaster,
+                ));
+                parent.spawn((
+                    Mesh3d(m.tower_column.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(-0.3, 1.0, -0.28).with_scale(Vec3::new(0.25, 0.6, 0.25)),
+                ));
+            }
+            BuildingKind::Habitat => {
+                parent.spawn((
+                    Mesh3d(m.drill_base.clone()),
+                    MeshMaterial3d(kit.dark_metal.clone()),
+                    Transform::from_xyz(0.0, 0.12, 0.0),
+                ));
+                parent.spawn((
+                    Mesh3d(m.dome.clone()),
+                    MeshMaterial3d(kit.hull.clone()),
+                    Transform::from_xyz(0.0, 0.25, 0.0).with_scale(Vec3::new(1.0, 0.85, 1.0)),
+                ));
+                parent.spawn((
+                    Mesh3d(m.window_ring.clone()),
+                    MeshMaterial3d(kit.glow_white.clone()),
+                    Transform::from_xyz(0.0, 0.4, 0.0).with_scale(Vec3::new(1.0, 0.6, 1.0)),
+                    NotShadowCaster,
+                ));
+            }
             BuildingKind::Hq => {}
         });
         views.buildings.insert(id, root.id());
+    }
+}
+
+/// Les bobines des centrales tournent… et ralentissent en manque d'énergie.
+fn animate_power_plants(
+    sim: Res<Sim>,
+    time: Res<Time>,
+    mut coils: Query<&mut Transform, With<PlantCoil>>,
+) {
+    let (produced, used) = sim.power;
+    let speed = if produced >= used { 2.5 } else { 0.6 };
+    for mut transform in &mut coils {
+        transform.rotate_y(time.delta_secs() * speed);
     }
 }
 
@@ -865,14 +976,23 @@ fn sync_enemies(
     kit: Res<Kit>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
+    fog: Res<crate::fog::FogOfWar>,
     mut views: ResMut<Views>,
-    mut transforms: Query<(&mut Transform, &mut MeshMaterial3d<CurvedMaterial>), With<EnemyView>>,
+    mut transforms: Query<
+        (
+            &mut Transform,
+            &mut MeshMaterial3d<CurvedMaterial>,
+            &mut Visibility,
+        ),
+        With<EnemyView>,
+    >,
     mut bursts: MessageWriter<Burst>,
 ) {
     // Ennemis détruits : une gerbe d'éclats (bien plus grosse pour un boss).
     for (id, entity) in &views.enemies {
         if !sim.enemies.iter().any(|e| e.id == *id)
-            && let Ok((transform, _)) = transforms.get(*entity)
+            && let Ok((transform, _, visibility)) = transforms.get(*entity)
+            && *visibility != Visibility::Hidden
         {
             let boss = transform.scale.x > 1.5;
             let (style, count) = if boss {
@@ -902,10 +1022,20 @@ fn sync_enemies(
         let transform = Transform::from_translation(from.lerp(to, alpha) + Vec3::Y * bob)
             .with_rotation(Quat::from_rotation_y(t * 1.5 + enemy.id as f32))
             .with_scale(Vec3::new(1.0, 0.8, 1.0) * scale);
+        // Dans le brouillard, on ne voit pas les ennemis.
+        let shown = if fog.visible_pos(enemy.pos) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         match views.enemies.get(&enemy.id) {
             Some(&entity) => {
-                if let Ok((mut current, mut material)) = transforms.get_mut(entity) {
+                if let Ok((mut current, mut material, mut visibility)) = transforms.get_mut(entity)
+                {
                     *current = transform;
+                    if *visibility != shown {
+                        *visibility = shown;
+                    }
                     // Teinte selon l'effet subi : vert empoisonné, cyan ralenti.
                     let wanted = if enemy.boss {
                         &kit.corruption_boss
@@ -929,6 +1059,7 @@ fn sync_enemies(
                         Mesh3d(kit.meshes.enemy.clone()),
                         MeshMaterial3d(kit.corruption.clone()),
                         transform,
+                        shown,
                     ))
                     .id();
                 views.enemies.insert(enemy.id, entity);
@@ -989,6 +1120,7 @@ fn draw_shots(
             ShotSource::Hq => 3.0,
             ShotSource::Tower => 1.35,
             ShotSource::Chain => 0.4,
+            ShotSource::Unit => 0.7,
         };
         let from = world::pos_to_world(&sim.map, shot.from) + Vec3::Y * height;
         let to = world::pos_to_world(&sim.map, shot.to) + Vec3::Y * 0.4;

@@ -50,6 +50,8 @@ pub enum Hit {
     Hq(i32),
     /// Un bâtiment qui lui barre la route.
     Building(Tile, i32),
+    /// Une unité au contact.
+    Unit(u32, i32),
 }
 
 /// Composition d'une vague.
@@ -225,6 +227,7 @@ impl Enemy {
         field: &FlowField,
         hq_center: Pos,
         blocked: impl Fn(Tile) -> bool,
+        unit_near: impl Fn(Pos) -> Option<u32>,
     ) -> Hit {
         self.prev_pos = self.pos;
         self.update_effects();
@@ -240,6 +243,11 @@ impl Enemy {
         if self.pos.distance_sq(hq_center) <= (ATTACK_RANGE as i64).pow(2) {
             let damage = self.damage;
             return strike(self, Hit::Hq(damage));
+        }
+        // Une unité au contact : la Corruption s'en prend à elle.
+        if let Some(unit) = unit_near(self.pos) {
+            let damage = self.damage;
+            return strike(self, Hit::Unit(unit, damage));
         }
         let here = self.pos.tile();
         let next = field.next(here);

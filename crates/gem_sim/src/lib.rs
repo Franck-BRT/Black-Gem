@@ -17,16 +17,18 @@ pub mod golem;
 pub mod map;
 pub mod noise;
 pub mod rng;
+pub mod unit;
 
 use std::collections::{BTreeMap, VecDeque};
 
 pub use building::{BuildError, Building, BuildingKind, BuildingState};
 pub use enemy::{Enemy, Hit};
-pub use expedition::{Bonuses, EXTRACTION_TICKS, ExpeditionConfig, Format};
+pub use expedition::{Bonuses, EXTRACTION_TICKS, ExpeditionConfig, Faction, Format};
 pub use gem::{Gem, GemColor, Item, TowerProfile};
 pub use geom::{Dir, Pos, Tile, UNITS_PER_TILE};
 pub use golem::{GOLEM_COST, Golem, GolemStatus, MAX_GOLEMS};
 pub use map::{Map, Terrain};
+pub use unit::{Ability, Order, Unit, UnitKind};
 
 use building::{BuildingState as State, Buildings, CORE_DRILL_SIZE, HQ_SIZE, Storage};
 use enemy::{FlowField, SPAWN_INTERVAL, choose_nests, wave_spec};
@@ -79,6 +81,17 @@ pub enum Command {
         golem: u32,
         slow: bool,
     },
+    /// Commande une unité à la caserne de cette case.
+    Train {
+        tile: Tile,
+    },
+    /// Ordre à des unités (elles se placent en formation autour du point visé).
+    Order {
+        units: Vec<u32>,
+        order: Order,
+    },
+    /// Pouvoir du héros.
+    Ability(Ability),
 }
 
 /// Ce qui vient de se passer pendant un tick, pour le son, les effets et les alertes. Ce
@@ -119,7 +132,28 @@ pub enum SimEvent {
     GolemBuilt,
     Victory,
     Defeat,
+    UnitTrained,
+    UnitLost,
+    NestDestroyed {
+        nest: usize,
+    },
+    HeroLevelUp {
+        level: u32,
+    },
+    AbilityUsed {
+        ability: Ability,
+        pos: Pos,
+    },
+    /// L'énergie vient à manquer (les machines ralentissent).
+    PowerShortage,
 }
+
+/// Points de vie d'un nid (avant la difficulté).
+const NEST_HP: i32 = 2500;
+/// Cristaux gagnés en détruisant un nid.
+pub const NEST_REWARD: u32 = 60;
+/// Ticks entre deux mises à jour du brouillard de guerre.
+const FOG_PERIOD: u64 = 10;
 
 /// Délai sans être frappé avant que la réparation automatique commence.
 const REPAIR_DELAY: u64 = 10 * TICKS_PER_SECOND as u64;
@@ -137,6 +171,15 @@ pub enum ShotSource {
     Tower,
     /// Rebond d'éclair d'un ennemi à l'autre (gemme jaune).
     Chain,
+    /// Tir d'une unité de combat.
+    Unit,
+}
+
+/// Décalage (en cases) de la k-ième unité d'un groupe : en carré autour du point visé.
+fn formation_offset(k: usize) -> (i32, i32) {
+    let side = 5;
+    let (col, row) = ((k % side) as i32, (k / side) as i32);
+    (col - side as i32 / 2, row)
 }
 
 /// Un tir (pour l'affichage des rayons).
@@ -195,6 +238,21 @@ pub struct Simulation {
     pub reservations: BTreeMap<Tile, u32>,
     /// … et canaux de messages (numéro → messages en attente).
     pub channels: BTreeMap<i64, VecDeque<i64>>,
+    /// Unités de combat (dont le héros).
+    pub units: Vec<Unit>,
+    /// Points de vie des nids (0 : détruit).
+    pub nest_hp: Vec<i32>,
+    pub nest_max_hp: i32,
+    /// Cases déjà vues (brouillard de guerre), ligne par ligne.
+    pub explored: Vec<bool>,
+    /// Énergie produite et consommée.
+    pub power: (i32, i32),
+    /// Héros tombé : il revient au QG à ce tick (son niveau est gardé).
+    pub fallen_hero: Option<(Unit, u64)>,
+    /// Tick à partir duquel chaque pouvoir du héros est de nouveau prêt.
+    pub ability_ready: [u64; 2],
+    power_acc: u32,
+    next_unit_id: u32,
     field: FlowField,
     /// Apparitions prévues, dans l'ordre chronologique.
     pending_spawns: VecDeque<PendingSpawn>,
@@ -232,11 +290,13 @@ impl Simulation {
             .collect();
         let field = FlowField::toward(&map, &hq_tiles);
         let nests = choose_nests(&map, &field);
+        let nests_len = nests.len();
+        let nest_hp = NEST_HP * config.difficulty as i32 / 100;
         let core = (config.stages > 0)
             .then(|| choose_core(&map, &field, hq_tile))
             .flatten();
 
-        Self {
+        let mut sim = Self {
             map,
             // On atterrit en début de matinée.
             tick: (config.ticks_per_day / 4) as u64,
@@ -263,12 +323,36 @@ impl Simulation {
             delivered: 0,
             reservations: BTreeMap::new(),
             channels: BTreeMap::new(),
+            units: Vec::new(),
+            nest_hp: vec![nest_hp; nests_len],
+            nest_max_hp: nest_hp,
+            explored: vec![false; (map_size * map_size) as usize],
+            power: (0, 0),
+            fallen_hero: None,
+            ability_ready: [0; 2],
+            power_acc: 0,
+            next_unit_id: 1,
             outcome: None,
             field,
             pending_spawns: VecDeque::new(),
             commands: Vec::new(),
             next_enemy_id: 1,
+        };
+        // Le Forgeron-Ingénieur débarque avec le QG.
+        let mut pos = sim.hq().center();
+        pos.y += 3 * UNITS_PER_TILE;
+        pos.x += 2 * UNITS_PER_TILE;
+        let hero = Unit::new(sim.next_unit_id, UnitKind::Hero, pos);
+        sim.next_unit_id += 1;
+        sim.units.push(hero);
+        sim.explore();
+        // Repérés depuis l'orbite : le Cœur et les nids (leur lueur se voit de loin).
+        let mut landmarks: Vec<(Pos, i32)> = sim.nests.iter().map(|n| (n.center(), 3)).collect();
+        if let Some(core) = sim.core {
+            landmarks.push((Tile::new(core.x + 1, core.y + 1).center(), 4));
         }
+        sim.reveal(&landmarks);
+        sim
     }
 
     /// Avancement du forage, en pour cent (0 sans Cœur).
@@ -332,10 +416,106 @@ impl Simulation {
             (_, None) => {}
         }
         self.buildings.check_site(&self.map, kind, tile)?;
+        let size = kind.size();
+        let unexplored = (0..size)
+            .flat_map(|dy| (0..size).map(move |dx| Tile::new(tile.x + dx, tile.y + dy)))
+            .any(|t| !self.is_explored(t));
+        if unexplored {
+            return Err(BuildError::Unexplored);
+        }
+        if let Some(required) = kind.requires()
+            && !self.buildings.iter().any(|b| b.kind == required)
+        {
+            return Err(BuildError::Requires(required));
+        }
         if self.stock < kind.cost() {
             return Err(BuildError::NotEnoughCrystals);
         }
         Ok(())
+    }
+
+    /// La case a-t-elle déjà été vue ?
+    pub fn is_explored(&self, tile: Tile) -> bool {
+        let size = self.map.size as i32;
+        (0..size).contains(&tile.x)
+            && (0..size).contains(&tile.y)
+            && self.explored[(tile.y * size + tile.x) as usize]
+    }
+
+    /// Ce qui voit (pour le brouillard de guerre) : position et rayon, en cases.
+    pub fn vision_sources(&self) -> Vec<(Pos, i32)> {
+        let mut sources: Vec<(Pos, i32)> = self
+            .buildings
+            .iter()
+            .map(|b| (b.center(), b.kind.sight()))
+            .collect();
+        sources.extend(self.units.iter().map(|u| (u.pos, u.kind.stats().sight)));
+        sources.extend(self.golems.iter().map(|g| (g.pos, 5)));
+        sources
+    }
+
+    /// Découvre la carte autour de tout ce qui voit.
+    fn explore(&mut self) {
+        let sources = self.vision_sources();
+        self.reveal(&sources);
+    }
+
+    fn reveal(&mut self, sources: &[(Pos, i32)]) {
+        let size = self.map.size as i32;
+        for &(pos, radius) in sources {
+            let center = pos.tile();
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                    let (x, y) = (center.x + dx, center.y + dy);
+                    if (0..size).contains(&x) && (0..size).contains(&y) {
+                        self.explored[(y * size + x) as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Le type d'unité que forme la caserne (selon la faction).
+    pub fn trained_kind(&self) -> UnitKind {
+        match self.config.faction {
+            Faction::Smiths => UnitKind::Sentinel,
+            Faction::Settlers => UnitKind::Tank,
+        }
+    }
+
+    /// Ravitaillement : (utilisé, maximum). Les unités commandées comptent déjà.
+    pub fn supply(&self) -> (u32, u32) {
+        let habitats = self
+            .buildings
+            .iter()
+            .filter(|b| b.kind == BuildingKind::Habitat)
+            .count() as u32;
+        let queued: u32 = self
+            .buildings
+            .iter()
+            .map(|b| match b.state {
+                State::Barracks { queue, .. } => queue,
+                _ => 0,
+            })
+            .sum();
+        let used = self
+            .units
+            .iter()
+            .map(|u| u.kind.stats().supply)
+            .sum::<u32>()
+            + queued * self.trained_kind().stats().supply;
+        (
+            used,
+            building::HQ_SUPPLY + building::HABITAT_SUPPLY * habitats,
+        )
+    }
+
+    /// Le héros (sur le terrain).
+    pub fn hero(&self) -> Option<&Unit> {
+        self.units.iter().find(|u| u.kind == UnitKind::Hero)
     }
 
     /// Enregistre un ordre ; il sera exécuté au début du prochain tick.
@@ -353,6 +533,7 @@ impl Simulation {
             self.apply(command);
         }
         self.update_waves();
+        self.update_power();
         let before = self.stock;
         self.buildings.update_logistics(&mut Storage {
             crystals: &mut self.stock,
@@ -365,10 +546,211 @@ impl Simulation {
         self.delivered += self.stock.saturating_sub(before);
         self.repair();
         self.update_drilling();
+        self.train_units();
+        self.update_units();
         self.fire_weapons();
         self.update_enemies();
+        if self.tick.is_multiple_of(FOG_PERIOD) {
+            self.explore();
+        }
         self.shots.retain(|s| s.tick + SHOT_LIFETIME > self.tick);
         self.tick += 1;
+    }
+
+    /// Bilan énergétique. En manque, les machines n'avancent qu'une partie des ticks
+    /// (à 50 % d'énergie, un tick sur deux) : tours, foreuses et ateliers ralentissent.
+    fn update_power(&mut self) {
+        let settlers = self.config.faction == Faction::Settlers;
+        let (mut produced, mut used) = (0, 0);
+        for b in self.buildings.iter() {
+            let mut power = b.kind.power();
+            if settlers && b.kind == BuildingKind::PowerPlant {
+                power = power * 3 / 2;
+            }
+            if power > 0 {
+                produced += power;
+            } else {
+                used -= power;
+            }
+        }
+        let was_short = self.power.0 < self.power.1;
+        self.power = (produced, used);
+        if produced < used && !was_short {
+            self.events.push(SimEvent::PowerShortage);
+        }
+        let percent = if used == 0 {
+            100
+        } else {
+            (produced * 100 / used).clamp(0, 100) as u32
+        };
+        self.power_acc += percent;
+        self.buildings.powered = self.power_acc >= 100;
+        if self.buildings.powered {
+            self.power_acc -= 100;
+        }
+    }
+
+    /// Les casernes forment les unités commandées.
+    fn train_units(&mut self) {
+        let kind = self.trained_kind();
+        let ticks = kind.stats().train_ticks;
+        let powered = self.buildings.powered;
+        for id in self.buildings.ids() {
+            let building = self.buildings.get_mut(id).unwrap();
+            let center = building.center();
+            let State::Barracks { queue, progress } = &mut building.state else {
+                continue;
+            };
+            if *queue == 0 || !powered {
+                continue;
+            }
+            *progress += 1;
+            if *progress < ticks {
+                continue;
+            }
+            *progress = 0;
+            *queue -= 1;
+            let mut pos = center;
+            pos.y += UNITS_PER_TILE + (self.next_unit_id as i32 % 3) * UNITS_PER_TILE / 2;
+            pos.x += (self.next_unit_id as i32 % 5 - 2) * UNITS_PER_TILE / 2;
+            self.units.push(Unit::new(self.next_unit_id, kind, pos));
+            self.next_unit_id += 1;
+            self.events.push(SimEvent::UnitTrained);
+        }
+    }
+
+    /// Les unités bougent et frappent ; le héros revient s'il est tombé.
+    fn update_units(&mut self) {
+        if let Some((_, at)) = &self.fallen_hero
+            && self.tick >= *at
+        {
+            let (mut hero, _) = self.fallen_hero.take().unwrap();
+            hero.hp = hero.max_hp;
+            hero.order = Order::Idle;
+            let mut pos = self.hq().center();
+            pos.y += 3 * UNITS_PER_TILE;
+            hero.pos = pos;
+            hero.prev_pos = pos;
+            self.units.push(hero);
+        }
+        let enemies: Vec<(u32, Pos)> = self
+            .enemies
+            .iter()
+            .filter(|e| e.hp > 0)
+            .map(|e| (e.id, e.pos))
+            .collect();
+        let nests: Vec<(usize, Pos)> = self
+            .nests
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.nest_hp[*i] > 0)
+            .map(|(i, t)| (i, t.center()))
+            .collect();
+        let around = unit::Surroundings {
+            enemies: &enemies,
+            nests: &nests,
+        };
+        let strikes: Vec<(usize, unit::Strike)> = self
+            .units
+            .iter_mut()
+            .enumerate()
+            .map(|(i, u)| (i, u.update(&around)))
+            .collect();
+        for (i, strike) in strikes {
+            match strike {
+                unit::Strike::Nothing => {}
+                unit::Strike::Enemy(id, damage) => {
+                    let from = self.units[i].pos;
+                    let Some(enemy) = self.enemies.iter_mut().find(|e| e.id == id) else {
+                        continue;
+                    };
+                    let alive = enemy.hp > 0;
+                    enemy.hp -= damage;
+                    let to = enemy.pos;
+                    let killed = alive && enemy.hp <= 0;
+                    let xp = if enemy.boss { 60 } else { 12 };
+                    self.shots.push(Shot {
+                        tick: self.tick,
+                        from,
+                        to,
+                        source: ShotSource::Unit,
+                        color: None,
+                    });
+                    if killed && self.units[i].gain_xp(xp) {
+                        let level = self.units[i].level;
+                        self.events.push(SimEvent::HeroLevelUp { level });
+                    }
+                }
+                unit::Strike::Nest(nest, damage) => {
+                    let from = self.units[i].pos;
+                    self.shots.push(Shot {
+                        tick: self.tick,
+                        from,
+                        to: self.nests[nest].center(),
+                        source: ShotSource::Unit,
+                        color: None,
+                    });
+                    self.damage_nest(nest, damage);
+                    if self.nest_hp[nest] <= 0 && self.units[i].gain_xp(150) {
+                        let level = self.units[i].level;
+                        self.events.push(SimEvent::HeroLevelUp { level });
+                    }
+                }
+            }
+        }
+    }
+
+    fn damage_nest(&mut self, nest: usize, damage: i32) {
+        if self.nest_hp[nest] <= 0 {
+            return;
+        }
+        self.nest_hp[nest] -= damage;
+        if self.nest_hp[nest] > 0 {
+            return;
+        }
+        self.nest_hp[nest] = 0;
+        self.stock += NEST_REWARD;
+        self.pending_spawns.retain(|s| s.nest != nest);
+        self.events.push(SimEvent::NestDestroyed { nest });
+        // En Colonie (pas de Cœur), détruire tous les nids est la victoire.
+        if self.core.is_none() && self.nest_hp.iter().all(|&hp| hp <= 0) && self.outcome.is_none() {
+            self.outcome = Some(Outcome::Victory);
+            self.events.push(SimEvent::Victory);
+        }
+    }
+
+    /// Pouvoir du héros.
+    fn use_ability(&mut self, ability: Ability) {
+        let Some(hero) = self.hero() else {
+            return;
+        };
+        let (pos, level) = (hero.pos, hero.level);
+        if level < ability.min_level() || self.tick < self.ability_ready[ability.index()] {
+            return;
+        }
+        self.ability_ready[ability.index()] = self.tick + ability.cooldown();
+        let radius_sq = (ability.radius() as i64).pow(2);
+        let damage = ability.damage(level);
+        let mut xp = 0;
+        for enemy in &mut self.enemies {
+            if enemy.hp <= 0 || enemy.pos.distance_sq(pos) > radius_sq {
+                continue;
+            }
+            enemy.hp -= damage;
+            if ability == Ability::FrostWave {
+                enemy.slow(60);
+            }
+            if enemy.hp <= 0 {
+                xp += if enemy.boss { 60 } else { 12 };
+            }
+        }
+        if let Some(hero) = self.units.iter_mut().find(|u| u.kind == UnitKind::Hero)
+            && hero.gain_xp(xp)
+        {
+            let level = hero.level;
+            self.events.push(SimEvent::HeroLevelUp { level });
+        }
+        self.events.push(SimEvent::AbilityUsed { ability, pos });
     }
 
     fn apply(&mut self, command: Command) {
@@ -437,6 +819,42 @@ impl Simulation {
                     golem.slow = slow;
                 }
             }
+            Command::Train { tile } => {
+                let kind = self.trained_kind();
+                let stats = kind.stats();
+                let (used, cap) = self.supply();
+                if self.stock < stats.cost || used + stats.supply > cap {
+                    return;
+                }
+                let Some(id) = self.buildings.at(tile).map(|b| b.id) else {
+                    return;
+                };
+                if let State::Barracks { queue, .. } =
+                    &mut self.buildings.get_mut(id).unwrap().state
+                    && *queue < building::BARRACKS_QUEUE
+                {
+                    *queue += 1;
+                    self.stock -= stats.cost;
+                }
+            }
+            Command::Order { mut units, order } => {
+                units.sort_unstable();
+                units.dedup();
+                for (k, id) in units.into_iter().enumerate() {
+                    let Some(unit) = self.units.iter_mut().find(|u| u.id == id) else {
+                        continue;
+                    };
+                    let (dx, dy) = formation_offset(k);
+                    let shift =
+                        |p: Pos| Pos::new(p.x + dx * UNITS_PER_TILE, p.y + dy * UNITS_PER_TILE);
+                    unit.order = match order {
+                        Order::Idle => Order::Idle,
+                        Order::Move(p) => Order::Move(shift(p)),
+                        Order::AttackMove(p) => Order::AttackMove(shift(p)),
+                    };
+                }
+            }
+            Command::Ability(ability) => self.use_ability(ability),
             Command::Unsocket { tile } => {
                 if let Some(id) = self.tower_at(tile)
                     && let State::Tower { gem: slot, .. } =
@@ -501,7 +919,7 @@ impl Simulation {
     fn schedule_wave(&mut self, level: u32, bosses: bool) {
         let spec = wave_spec(level, self.config.difficulty);
         for nest in 0..self.nests.len() {
-            if bosses {
+            if bosses && self.nest_hp[nest] > 0 {
                 self.pending_spawns.push_back(PendingSpawn {
                     at: self.tick + nest as u64 * 7,
                     nest,
@@ -511,7 +929,7 @@ impl Simulation {
             }
         }
         for i in 0..spec.per_nest as u64 {
-            for nest in 0..self.nests.len() {
+            for nest in (0..self.nests.len()).filter(|&n| self.nest_hp[n] > 0) {
                 self.pending_spawns.push_back(PendingSpawn {
                     at: self.tick + (i + bosses as u64) * SPAWN_INTERVAL + nest as u64 * 7,
                     nest,
@@ -568,6 +986,7 @@ impl Simulation {
     }
 
     fn fire_weapons(&mut self) {
+        let powered = self.buildings.powered;
         for id in self.buildings.ids() {
             let building = self.buildings.get_mut(id).unwrap();
             let Some((mut profile, reload)) = building.weapon() else {
@@ -576,6 +995,9 @@ impl Simulation {
             if building.kind == BuildingKind::Tower {
                 let bonuses = &self.config.bonuses;
                 profile.damage = profile.damage * bonuses.tower_damage / 100;
+                if self.config.faction == Faction::Smiths {
+                    profile.damage = profile.damage * 115 / 100;
+                }
                 profile.range += bonuses.tower_range;
             }
             let center = building.center();
@@ -592,7 +1014,10 @@ impl Simulation {
                 _ => continue,
             };
             if *cooldown > 0 {
-                *cooldown -= 1;
+                // Sans énergie, les tours rechargent plus lentement (le QG a la sienne).
+                if charge.is_none() || powered {
+                    *cooldown -= 1;
+                }
                 continue;
             }
             if charge.as_ref().is_some_and(|c| **c == 0) {
@@ -684,10 +1109,19 @@ impl Simulation {
                 .at(tile)
                 .is_some_and(|b| b.kind != BuildingKind::Hq)
         };
+        let units: Vec<(u32, Pos)> = self.units.iter().map(|u| (u.id, u.pos)).collect();
+        let contact = (UNITS_PER_TILE as i64 * 3 / 2).pow(2);
+        let unit_near = |p: Pos| {
+            units
+                .iter()
+                .filter(|(_, q)| q.distance_sq(p) <= contact)
+                .min_by_key(|(id, q)| (q.distance_sq(p), *id))
+                .map(|(id, _)| *id)
+        };
         let hits: Vec<Hit> = self
             .enemies
             .iter_mut()
-            .map(|e| e.update(&self.field, hq_center, blocked))
+            .map(|e| e.update(&self.field, hq_center, blocked, unit_near))
             .collect();
         let mut hq_damage = 0;
         for hit in hits {
@@ -695,6 +1129,24 @@ impl Simulation {
                 Hit::Nothing => {}
                 Hit::Hq(damage) => hq_damage += damage,
                 Hit::Building(tile, damage) => self.damage_building(tile, damage),
+                Hit::Unit(id, damage) => {
+                    if let Some(unit) = self.units.iter_mut().find(|u| u.id == id) {
+                        unit.hp -= damage;
+                    }
+                }
+            }
+        }
+        // Unités tombées (le héros reviendra au QG).
+        let mut i = 0;
+        while i < self.units.len() {
+            if self.units[i].hp > 0 {
+                i += 1;
+                continue;
+            }
+            let unit = self.units.remove(i);
+            self.events.push(SimEvent::UnitLost);
+            if unit.kind == UnitKind::Hero {
+                self.fallen_hero = Some((unit, self.tick + unit::HERO_RESPAWN_TICKS));
             }
         }
         if hq_damage > 0 {
@@ -804,6 +1256,21 @@ impl Simulation {
                 feed(byte as i64);
             }
         }
+        for u in &self.units {
+            feed(u.id as i64);
+            feed(u.pos.x as i64);
+            feed(u.pos.y as i64);
+            feed(u.hp as i64);
+            feed(u.xp as i64);
+            for byte in format!("{:?}", u.order).bytes() {
+                feed(byte as i64);
+            }
+        }
+        for hp in &self.nest_hp {
+            feed(*hp as i64);
+        }
+        feed(self.explored.iter().filter(|e| **e).count() as i64);
+        feed(self.power_acc as i64);
         for (tile, owner) in &self.reservations {
             feed(tile.x as i64);
             feed(tile.y as i64);
@@ -1146,7 +1613,8 @@ mod tests {
     fn every_format_has_a_reachable_core_except_colony() {
         for seed in [1, 7, 2026] {
             for format in Format::ALL {
-                let sim = Simulation::with_format(seed, format);
+                let mut sim = Simulation::with_format(seed, format);
+                sim.explored.fill(true);
                 assert_eq!(sim.map.size, format.config().map_size);
                 match format {
                     Format::Colony => assert!(sim.core.is_none()),
@@ -1169,6 +1637,7 @@ mod tests {
     #[test]
     fn drilling_triggers_boss_waves_then_extraction_and_victory() {
         let mut sim = Simulation::with_format(5, Format::Scout);
+        sim.explored.fill(true);
         let core = sim.core.unwrap();
         sim.stock = 1000;
         sim.queue(Command::Build {
@@ -1258,5 +1727,225 @@ mod tests {
             sim.checksum()
         };
         assert_eq!(play(), play());
+    }
+
+    /// Première case libre (et découverte) autour de `near` pour ce bâtiment.
+    fn free_tile(sim: &Simulation, kind: BuildingKind, near: Tile) -> Tile {
+        for r in 2..14 {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let tile = Tile::new(near.x + dx, near.y + dy);
+                    if sim.check_build(kind, tile).is_ok() {
+                        return tile;
+                    }
+                }
+            }
+        }
+        panic!("pas de place pour {kind:?}");
+    }
+
+    fn build(sim: &mut Simulation, kind: BuildingKind) -> Tile {
+        let tile = free_tile(sim, kind, sim.hq().tile);
+        sim.queue(Command::Build {
+            kind,
+            tile,
+            dir: Dir::East,
+        });
+        sim.step();
+        assert!(sim.buildings.at(tile).is_some_and(|b| b.kind == kind));
+        tile
+    }
+
+    #[test]
+    fn power_shortage_slows_machines_until_a_plant_is_built() {
+        let mut sim = Simulation::new(4, 96);
+        sim.stock = 10_000;
+        let mut shortages = 0;
+        for _ in 0..4 {
+            build(&mut sim, BuildingKind::Tower);
+            shortages += sim
+                .events
+                .iter()
+                .filter(|e| **e == SimEvent::PowerShortage)
+                .count();
+        }
+        sim.step();
+        assert_eq!(sim.power, (6, 8));
+        assert_eq!(shortages, 1);
+        let mut powered = 0;
+        for _ in 0..40 {
+            sim.step();
+            powered += sim.buildings.powered as u32;
+        }
+        assert_eq!(powered, 30);
+        build(&mut sim, BuildingKind::PowerPlant);
+        sim.step();
+        assert_eq!(sim.power, (6 + building::POWER_PLANT_OUTPUT, 8));
+        for _ in 0..10 {
+            sim.step();
+            assert!(sim.buildings.powered);
+        }
+    }
+
+    #[test]
+    fn barracks_train_units_within_the_supply_limit() {
+        let mut sim = Simulation::new(4, 96);
+        sim.stock = 10_000;
+        let hq = sim.hq().tile;
+        assert_eq!(
+            sim.check_build(
+                BuildingKind::Barracks,
+                free_tile(&sim, BuildingKind::Conveyor, hq)
+            ),
+            Err(BuildError::Requires(BuildingKind::PowerPlant))
+        );
+        build(&mut sim, BuildingKind::PowerPlant);
+        let barracks = build(&mut sim, BuildingKind::Barracks);
+        let before = sim.stock;
+        for _ in 0..6 {
+            sim.queue(Command::Train { tile: barracks });
+        }
+        sim.step();
+        // Le QG loge 4 unités : la 5e et la 6e sont refusées.
+        assert_eq!(sim.supply(), (4, building::HQ_SUPPLY));
+        assert_eq!(before - sim.stock, 4 * UnitKind::Sentinel.stats().cost);
+        let mut trained = 0;
+        for _ in 0..4 * UnitKind::Sentinel.stats().train_ticks + 10 {
+            sim.step();
+            trained += sim
+                .events
+                .iter()
+                .filter(|e| **e == SimEvent::UnitTrained)
+                .count();
+        }
+        assert_eq!(trained, 4);
+        let sentinels = sim
+            .units
+            .iter()
+            .filter(|u| u.kind == UnitKind::Sentinel)
+            .count();
+        assert_eq!(sentinels, 4);
+        // Un habitat en loge 4 de plus.
+        build(&mut sim, BuildingKind::Habitat);
+        assert_eq!(
+            sim.supply(),
+            (4, building::HQ_SUPPLY + building::HABITAT_SUPPLY)
+        );
+    }
+
+    #[test]
+    fn units_follow_orders_in_formation() {
+        let mut sim = Simulation::new(4, 96);
+        let hero = sim.hero().unwrap().id;
+        let hq = sim.hq().tile;
+        let target = Tile::new(hq.x + 8, hq.y + 8).center();
+        sim.queue(Command::Order {
+            units: vec![hero, hero, 12345],
+            order: Order::Move(target),
+        });
+        run(&mut sim, 300);
+        let hero = sim.hero().unwrap();
+        assert_eq!(hero.order, Order::Idle);
+        assert!(hero.pos.distance_sq(target) <= (3 * UNITS_PER_TILE as i64).pow(2));
+    }
+
+    #[test]
+    fn an_army_destroys_nests_and_wins_the_colony() {
+        let mut sim = Simulation::with_format(3, Format::Colony);
+        let mut id = 100;
+        for nest in sim.nests.clone() {
+            for k in 0..12 {
+                let mut unit = Unit::new(id, UnitKind::Tank, nest.center());
+                unit.pos.x += (k % 4 - 2) * UNITS_PER_TILE / 2;
+                unit.pos.y += (k / 4 - 1) * UNITS_PER_TILE / 2;
+                sim.units.push(unit);
+                id += 1;
+            }
+        }
+        let stock = sim.stock;
+        let mut destroyed = 0;
+        for _ in 0..2000 {
+            sim.step();
+            destroyed += sim
+                .events
+                .iter()
+                .filter(|e| matches!(e, SimEvent::NestDestroyed { .. }))
+                .count();
+            if sim.outcome.is_some() {
+                break;
+            }
+        }
+        assert_eq!(destroyed, sim.nests.len());
+        assert!(sim.nest_hp.iter().all(|&hp| hp == 0));
+        assert_eq!(sim.outcome, Some(Outcome::Victory));
+        assert!(sim.stock >= stock + NEST_REWARD * sim.nests.len() as u32);
+    }
+
+    #[test]
+    fn hero_abilities_have_levels_and_cooldowns() {
+        let mut sim = Simulation::new(4, 96);
+        let pos = sim.hero().unwrap().pos;
+        let spec = wave_spec(1, 100);
+        let mut enemy = Enemy::new(999, pos, &spec);
+        enemy.hp = 10_000;
+        sim.enemies.push(enemy);
+        // La pluie de cristaux demande le niveau 3.
+        sim.queue(Command::Ability(Ability::CrystalRain));
+        sim.step();
+        assert!(
+            sim.events
+                .iter()
+                .all(|e| !matches!(e, SimEvent::AbilityUsed { .. }))
+        );
+        let hp = sim.enemies[0].hp;
+        sim.queue(Command::Ability(Ability::FrostWave));
+        sim.step();
+        assert!(sim.events.iter().any(|e| matches!(
+            e,
+            SimEvent::AbilityUsed {
+                ability: Ability::FrostWave,
+                ..
+            }
+        )));
+        assert!(hp - sim.enemies[0].hp >= Ability::FrostWave.damage(1));
+        // Encore en recharge.
+        sim.queue(Command::Ability(Ability::FrostWave));
+        sim.step();
+        assert!(
+            sim.events
+                .iter()
+                .all(|e| !matches!(e, SimEvent::AbilityUsed { .. }))
+        );
+    }
+
+    #[test]
+    fn the_fallen_hero_comes_back_to_the_hq() {
+        let mut sim = Simulation::new(4, 96);
+        sim.units[0].hp = 0;
+        sim.step();
+        assert!(sim.hero().is_none());
+        assert!(sim.events.contains(&SimEvent::UnitLost));
+        run(&mut sim, unit::HERO_RESPAWN_TICKS);
+        let hero = sim.hero().unwrap();
+        assert_eq!(hero.hp, hero.max_hp);
+    }
+
+    #[test]
+    fn fog_of_war_hides_far_tiles_until_explored() {
+        let mut sim = Simulation::new(4, 96);
+        let hq = sim.hq().tile;
+        let far = Tile::new(hq.x + 30, hq.y);
+        assert!(!sim.is_explored(far));
+        assert_eq!(
+            sim.check_build(BuildingKind::Conveyor, far),
+            Err(BuildError::Unexplored)
+        );
+        let hero = sim.hero().unwrap().id;
+        sim.queue(Command::Order {
+            units: vec![hero],
+            order: Order::Move(far.center()),
+        });
+        run(&mut sim, 600);
+        assert!(sim.is_explored(far));
     }
 }

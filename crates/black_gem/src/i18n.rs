@@ -72,6 +72,12 @@ pub enum Tr {
     LiftOffIn,
     ColonyGoal,
     Night,
+    NeedBarracks,
+    SupplyFull,
+    QueueFull,
+    AbilityLocked,
+    AbilityCooldown,
+    HeroDown,
     Building(BuildingKind),
     Color(GemColor),
     Error(BuildError),
@@ -89,8 +95,8 @@ impl Language {
     pub fn tr(self, key: Tr) -> &'static str {
         use Language::*;
         match (key, self) {
-            (Tr::Subtitle, French) => "Prototype M9 — expédition",
-            (Tr::Subtitle, English) => "Prototype M9 — expedition",
+            (Tr::Subtitle, French) => "Prototype M10 — expédition",
+            (Tr::Subtitle, English) => "Prototype M10 — expedition",
             (Tr::Seed, French) => "Graine",
             (Tr::Seed, English) => "Seed",
             (Tr::Day, French) => "Jour",
@@ -105,7 +111,10 @@ impl Language {
             (Tr::Paused, English) => "PAUSED",
             (Tr::Controls, French) => {
                 "B : foreuse   C : convoyeur   G : taillerie   F : four   T : tour   O : Grand foreur   X : démolir   R : tourner\n\
+                 P : centrale   Y : caserne   I : habitat   Entrée : former une unité\n\
                  clic gauche : construire (glisser pour une ligne de convoyeurs)   Échap : annuler\n\
+                 armée : clic (ou cadre) pour choisir, clic droit pour attaquer là (Ctrl : sans combattre)\n\
+                 Tab : héros puis armée   J : onde de gel   K : pluie de cristaux\n\
                  gemmes : clic sur une gemme de l'inventaire, puis sur une tour   U : retirer une gemme\n\
                  golems : clic sur un golem (ou dans la liste) pour écrire son programme (Python ou Rust)\n\
                  ZQSD / flèches : déplacer   A / E : pivoter   molette : zoom   clic droit + glisser : orienter\n\
@@ -114,7 +123,10 @@ impl Language {
             }
             (Tr::Controls, English) => {
                 "B: drill   C: conveyor   G: gem cutter   F: furnace   T: tower   O: Great drill   X: demolish   R: rotate\n\
+                 P: power plant   Y: barracks   I: habitat   Enter: train a unit\n\
                  left click: build (drag for a line of conveyors)   Esc: cancel\n\
+                 army: click (or drag a box) to select, right click to attack there (Ctrl: just move)\n\
+                 Tab: hero then army   J: frost wave   K: crystal rain\n\
                  gems: click a gem in the inventory, then a tower   U: remove a gem\n\
                  golems: click a golem (or in the list) to write its program (Python or Rust)\n\
                  WASD / arrows: move   Q / E: rotate   wheel: zoom   right click + drag: orbit\n\
@@ -235,6 +247,18 @@ impl Language {
             (Tr::ColonyGoal, English) => "Colony: survive as long as you can",
             (Tr::Night, French) => "Nuit",
             (Tr::Night, English) => "Night",
+            (Tr::NeedBarracks, French) => "Il faut une Caserne (touche Y) pour former des unités",
+            (Tr::NeedBarracks, English) => "Build Barracks (Y key) to train units",
+            (Tr::SupplyFull, French) => "Ravitaillement plein : construis un Habitat (touche I)",
+            (Tr::SupplyFull, English) => "Supply full: build a Habitat (I key)",
+            (Tr::QueueFull, French) => "La caserne a déjà 5 unités en attente",
+            (Tr::QueueFull, English) => "The barracks already has 5 units queued",
+            (Tr::AbilityLocked, French) => "Pluie de cristaux : le héros doit être niveau 3",
+            (Tr::AbilityLocked, English) => "Crystal rain: the hero must be level 3",
+            (Tr::AbilityCooldown, French) => "Pouvoir en recharge",
+            (Tr::AbilityCooldown, English) => "Ability recharging",
+            (Tr::HeroDown, French) => "Le héros est tombé : il revient bientôt au QG",
+            (Tr::HeroDown, English) => "The hero has fallen: back at the HQ soon",
             (Tr::Building(kind), lang) => building_name(kind, lang),
             (Tr::Color(color), lang) => color_name(color, lang),
             (Tr::Error(error), lang) => error_text(error, lang),
@@ -258,6 +282,11 @@ fn building_name(kind: BuildingKind, lang: Language) -> &'static str {
         BuildingKind::Tower => "Tower",
         BuildingKind::CoreDrill if french => "Grand foreur",
         BuildingKind::CoreDrill => "Great drill",
+        BuildingKind::PowerPlant if french => "Centrale",
+        BuildingKind::PowerPlant => "Power plant",
+        BuildingKind::Barracks if french => "Caserne",
+        BuildingKind::Barracks => "Barracks",
+        BuildingKind::Habitat => "Habitat",
     }
 }
 
@@ -313,6 +342,16 @@ fn error_text(error: BuildError, lang: Language) -> &'static str {
         BuildError::CoreSite => "The Core is reserved for the Great drill",
         BuildError::NoCore if french => "Pas de Cœur à forer en mode Colonie",
         BuildError::NoCore => "No Core to drill in Colony mode",
+        BuildError::Unexplored if french => {
+            "Zone inexplorée : envoie le héros ou une unité la découvrir"
+        }
+        BuildError::Unexplored => "Unexplored area: send the hero or a unit to scout it",
+        BuildError::Requires(BuildingKind::PowerPlant) if french => "Il faut d'abord une Centrale",
+        BuildError::Requires(BuildingKind::PowerPlant) => "Requires a Power plant first",
+        BuildError::Requires(BuildingKind::Barracks) if french => "Il faut d'abord une Caserne",
+        BuildError::Requires(BuildingKind::Barracks) => "Requires Barracks first",
+        BuildError::Requires(_) if french => "Il faut d'abord un autre bâtiment",
+        BuildError::Requires(_) => "Requires another building first",
     }
 }
 

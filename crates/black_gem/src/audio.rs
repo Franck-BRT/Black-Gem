@@ -46,10 +46,16 @@ enum Sfx {
     Golem,
     Victory,
     Defeat,
+    /// Unité formée : clairon bref.
+    Trained,
+    /// Pouvoir du héros : souffle cristallin.
+    Ability,
+    /// Le héros monte de niveau.
+    LevelUp,
 }
 
 impl Sfx {
-    const ALL: [Sfx; 18] = [
+    const ALL: [Sfx; 21] = [
         Sfx::Shot(0),
         Sfx::Shot(1),
         Sfx::Shot(2),
@@ -68,6 +74,9 @@ impl Sfx {
         Sfx::Golem,
         Sfx::Victory,
         Sfx::Defeat,
+        Sfx::Trained,
+        Sfx::Ability,
+        Sfx::LevelUp,
     ];
 
     /// Intervalle minimal entre deux lectures du même son (secondes), pour ne pas saturer
@@ -157,6 +166,12 @@ fn sfx_for(event: &SimEvent) -> Option<Sfx> {
         SimEvent::GolemBuilt => Sfx::Golem,
         SimEvent::Victory => Sfx::Victory,
         SimEvent::Defeat => Sfx::Defeat,
+        SimEvent::UnitTrained => Sfx::Trained,
+        SimEvent::UnitLost => Sfx::Hit,
+        SimEvent::NestDestroyed { .. } => Sfx::BossKill,
+        SimEvent::HeroLevelUp { .. } => Sfx::LevelUp,
+        SimEvent::AbilityUsed { .. } => Sfx::Ability,
+        SimEvent::PowerShortage => return None,
     })
 }
 
@@ -475,6 +490,23 @@ fn synth_raw(kind: Sfx) -> Vec<f32> {
             ],
             2.0,
             false,
+        ),
+        Sfx::Trained => notes(&[(392.0, 0.0, 0.09), (587.3, 0.08, 0.16)], 0.26, false),
+        Sfx::Ability => {
+            let mut lp = LowPass::new(3000.0, SFX_RATE);
+            render(
+                0.8,
+                |t| 1800.0 - 1300.0 * t,
+                |t, p| {
+                    let env = (t / 0.03).min(1.0) * (-t * 4.5).exp();
+                    (sine(p) * 0.5 + 0.25 * sine(p * 2.01) + lp.run(noise.next()) * 0.6) * env
+                },
+            )
+        }
+        Sfx::LevelUp => notes(
+            &[(659.3, 0.0, 0.3), (880.0, 0.1, 0.3), (1318.5, 0.2, 0.6)],
+            0.9,
+            true,
         ),
     }
 }

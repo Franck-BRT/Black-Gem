@@ -25,11 +25,26 @@ pub struct Curvature {
     /// xy : point visé (x, z du monde) ; z : force ; w : inutilisé (alignement 16 octets pour WebGL2).
     #[uniform(100)]
     pub params: Vec4,
+    /// Brouillard de guerre : une valeur par case (voir `fog.rs`).
+    #[texture(102)]
+    #[sampler(103)]
+    pub fog: Option<Handle<Image>>,
+    /// x : demi-côté de la carte ; y : 1 / côté ; z : 1 si actif.
+    #[uniform(104)]
+    pub fog_params: Vec4,
 }
 
 impl MaterialExtension for Curvature {
     fn vertex_shader() -> ShaderRef {
         "embedded://black_gem/shaders/curved_mesh.wesl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "embedded://black_gem/shaders/fogged.wesl".into()
+    }
+
+    fn deferred_fragment_shader() -> ShaderRef {
+        "embedded://black_gem/shaders/fogged.wesl".into()
     }
 
     fn prepass_vertex_shader() -> ShaderRef {
@@ -45,6 +60,11 @@ pub struct Water {
     /// x : temps, en secondes.
     #[uniform(101)]
     pub wave: Vec4,
+    #[texture(102)]
+    #[sampler(103)]
+    pub fog: Option<Handle<Image>>,
+    #[uniform(104)]
+    pub fog_params: Vec4,
 }
 
 impl MaterialExtension for Water {
@@ -78,6 +98,7 @@ impl Plugin for CurvaturePlugin {
         bevy::asset::embedded_asset!(app, "shaders/curved_mesh.wesl");
         bevy::asset::embedded_asset!(app, "shaders/curved_prepass.wesl");
         bevy::asset::embedded_asset!(app, "shaders/water.wesl");
+        bevy::asset::embedded_asset!(app, "shaders/fogged.wesl");
         app.add_plugins(MaterialPlugin::<CurvedMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_systems(Update, animate_water)
@@ -125,7 +146,7 @@ fn animate_water(
     }
 }
 
-fn update_curvature(
+pub fn update_curvature(
     camera: Single<&RtsCamera>,
     mut current: ResMut<CurrentCurvature>,
     mut materials: ResMut<Assets<CurvedMaterial>>,

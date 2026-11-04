@@ -102,6 +102,9 @@ fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<BuildState>) {
         (KeyCode::KeyF, Tool::Build(BuildingKind::Furnace)),
         (KeyCode::KeyT, Tool::Build(BuildingKind::Tower)),
         (KeyCode::KeyO, Tool::Build(BuildingKind::CoreDrill)),
+        (KeyCode::KeyP, Tool::Build(BuildingKind::PowerPlant)),
+        (KeyCode::KeyY, Tool::Build(BuildingKind::Barracks)),
+        (KeyCode::KeyI, Tool::Build(BuildingKind::Habitat)),
         (KeyCode::KeyX, Tool::Demolish),
         (KeyCode::KeyU, Tool::Unsocket),
     ];
@@ -123,7 +126,7 @@ fn hotkeys(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<BuildState>) {
 }
 
 /// Le pointeur est-il au-dessus d'un élément d'interface ?
-fn pointer_over_ui(blockers: &Query<&Hovered, With<BlocksWorldInput>>) -> bool {
+pub fn pointer_over_ui(blockers: &Query<&Hovered, With<BlocksWorldInput>>) -> bool {
     blockers.iter().any(|hovered| hovered.get())
 }
 
@@ -164,10 +167,13 @@ fn building_height(kind: BuildingKind) -> f32 {
         BuildingKind::Drill | BuildingKind::Cutter => 0.9,
         BuildingKind::Conveyor => 0.15,
         BuildingKind::CoreDrill => 5.0,
+        BuildingKind::PowerPlant => 1.3,
+        BuildingKind::Barracks => 1.1,
+        BuildingKind::Habitat => 0.9,
     }
 }
 
-fn pick_tile(
+pub fn pick_tile(
     screen: Vec2,
     camera: (&Camera, &GlobalTransform),
     sim: &Simulation,
@@ -331,7 +337,7 @@ fn after_issue(state: &mut BuildState, error: Option<Tr>, now: f32) {
     }
 }
 
-fn mouse_build(
+pub fn mouse_build(
     buttons: Res<ButtonInput<MouseButton>>,
     window: Single<&Window>,
     real_time: Res<Time<Real>>,

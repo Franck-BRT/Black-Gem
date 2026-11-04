@@ -25,6 +25,13 @@ pub const CUT_TICKS: u32 = 60;
 /// Durée d'une fusion (4 s).
 pub const FUSE_TICKS: u32 = 120;
 const TOWER_COOLDOWN: u32 = 15;
+/// Énergie d'une centrale.
+pub const POWER_PLANT_OUTPUT: i32 = 12;
+/// Ravitaillement : offert par le QG, et par chaque habitat.
+pub const HQ_SUPPLY: u32 = 4;
+pub const HABITAT_SUPPLY: u32 = 4;
+/// Unités en attente au plus dans une caserne.
+pub const BARRACKS_QUEUE: u32 = 5;
 const HQ_COOLDOWN: u32 = 24;
 
 /// Côté du carré occupé par le QG, en cases.
@@ -47,18 +54,60 @@ pub enum BuildingKind {
     Tower,
     /// Grand foreur : se construit sur le Cœur et creuse jusqu'à la Gemme Noire.
     CoreDrill,
+    /// Centrale : produit l'énergie dont les tours et les ateliers ont besoin.
+    PowerPlant,
+    /// Caserne : forme les unités de combat (il faut une centrale).
+    Barracks,
+    /// Habitat : augmente le ravitaillement (nombre d'unités possibles).
+    Habitat,
 }
 
 impl BuildingKind {
     /// Bâtiments que le joueur peut construire.
-    pub const BUILDABLE: [BuildingKind; 6] = [
+    pub const BUILDABLE: [BuildingKind; 9] = [
         BuildingKind::Drill,
         BuildingKind::Conveyor,
         BuildingKind::Cutter,
         BuildingKind::Furnace,
         BuildingKind::Tower,
+        BuildingKind::PowerPlant,
+        BuildingKind::Barracks,
+        BuildingKind::Habitat,
         BuildingKind::CoreDrill,
     ];
+
+    /// Énergie produite (positive) ou consommée (négative).
+    pub const fn power(self) -> i32 {
+        match self {
+            BuildingKind::Hq => 6,
+            BuildingKind::PowerPlant => POWER_PLANT_OUTPUT,
+            BuildingKind::Drill => -1,
+            BuildingKind::Cutter | BuildingKind::Furnace | BuildingKind::Tower => -2,
+            BuildingKind::Barracks => -3,
+            BuildingKind::CoreDrill => -4,
+            BuildingKind::Conveyor | BuildingKind::Habitat => 0,
+        }
+    }
+
+    /// Bâtiment à posséder avant de pouvoir construire celui-ci (arbre technologique).
+    pub const fn requires(self) -> Option<BuildingKind> {
+        match self {
+            BuildingKind::Barracks => Some(BuildingKind::PowerPlant),
+            BuildingKind::Habitat => Some(BuildingKind::Barracks),
+            _ => None,
+        }
+    }
+
+    /// Rayon de vision, en cases (brouillard de guerre).
+    pub const fn sight(self) -> i32 {
+        match self {
+            BuildingKind::Hq => 14,
+            BuildingKind::Tower => 8,
+            BuildingKind::CoreDrill => 7,
+            BuildingKind::Conveyor => 2,
+            _ => 5,
+        }
+    }
 
     /// Côté du carré occupé, en cases.
     pub const fn size(self) -> i32 {
@@ -79,6 +128,9 @@ impl BuildingKind {
             BuildingKind::Cutter => 15,
             BuildingKind::Furnace => 25,
             BuildingKind::Tower => 20,
+            BuildingKind::PowerPlant => 30,
+            BuildingKind::Barracks => 40,
+            BuildingKind::Habitat => 20,
         }
     }
 
@@ -90,6 +142,8 @@ impl BuildingKind {
             BuildingKind::Conveyor => 40,
             BuildingKind::Cutter | BuildingKind::Furnace => 150,
             BuildingKind::Tower => 200,
+            BuildingKind::PowerPlant | BuildingKind::Habitat => 180,
+            BuildingKind::Barracks => 300,
         }
     }
 }
@@ -135,6 +189,13 @@ pub enum BuildingState {
         fuel: u32,
         timer: u32,
     },
+    PowerPlant,
+    Barracks {
+        /// Unités commandées, et avancement de la première.
+        queue: u32,
+        progress: u32,
+    },
+    Habitat,
 }
 
 #[derive(Clone, Debug)]
@@ -261,6 +322,10 @@ pub enum BuildError {
     CoreSite,
     /// Pas de Cœur à forer dans ce format (Colonie).
     NoCore,
+    /// Il faut d'abord ce bâtiment (arbre technologique).
+    Requires(BuildingKind),
+    /// La case n'a jamais été vue (brouillard de guerre).
+    Unexplored,
 }
 
 /// Tous les bâtiments, dans un ordre déterministe (par identifiant).
@@ -275,6 +340,9 @@ pub struct Buildings {
     pub version: u64,
     /// Règles de l'expédition (cadences, coûts…), modifiées par la recherche.
     pub rules: Bonuses,
+    /// Ce tick-ci, les machines électriques avancent (assez d'énergie, ou une fois sur deux
+    /// en cas de manque : voir `Simulation::update_power`).
+    pub powered: bool,
 }
 
 impl Buildings {
@@ -286,6 +354,7 @@ impl Buildings {
             next_id: 1,
             version: 0,
             rules,
+            powered: true,
         }
     }
 
@@ -370,6 +439,12 @@ impl Buildings {
                 cooldown: 0,
                 gem: None,
             },
+            BuildingKind::PowerPlant => BuildingState::PowerPlant,
+            BuildingKind::Barracks => BuildingState::Barracks {
+                queue: 0,
+                progress: 0,
+            },
+            BuildingKind::Habitat => BuildingState::Habitat,
         };
         let building = Building {
             id,
@@ -482,7 +557,7 @@ impl Buildings {
                     mut timer,
                     mut buffer,
                 } => {
-                    if buffer < DRILL_BUFFER {
+                    if buffer < DRILL_BUFFER && self.powered {
                         timer += 1;
                         if timer >= self.rules.drill_period {
                             timer = 0;
@@ -523,7 +598,8 @@ impl Buildings {
                                 cutting = None;
                             }
                         }
-                        Some((color, t)) => cutting = Some((color, t + 1)),
+                        Some((color, t)) if self.powered => cutting = Some((color, t + 1)),
+                        Some(_) => {}
                         None => {
                             if let Some(color) = GemColor::ALL
                                 .into_iter()
@@ -546,7 +622,9 @@ impl Buildings {
                     mut output,
                 } => {
                     self.push_out(from, to, &mut output, storage);
-                    if let [Some(a), Some(b)] = slots {
+                    if let [Some(a), Some(b)] = slots
+                        && self.powered
+                    {
                         progress += 1;
                         if progress >= FUSE_TICKS && output.is_none() {
                             output = a.fuse(b);
@@ -560,7 +638,7 @@ impl Buildings {
                         output,
                     }
                 }
-                BuildingState::CoreDrill { fuel, timer } if fuel > 0 => {
+                BuildingState::CoreDrill { fuel, timer } if fuel > 0 && self.powered => {
                     if timer + 1 >= self.rules.core_drill_period {
                         *storage.drilled += 1;
                         BuildingState::CoreDrill {
